@@ -38,6 +38,10 @@ def cmd_init(args) -> int:
     conn = _conn()
     added = seed_rules(conn)
     print(f"Database ready at {config.DB_PATH}")
+    if config.DATA_DIR == config.LEGACY_DATA_DIR:
+        print("Note: this database sits inside the project folder. If that folder is "
+              "synced\n      (iCloud Drive, Dropbox, OneDrive), move it -- see the macOS "
+              "note in the README.")
     print(f"Seeded {added} categorisation rules.")
     return 0
 

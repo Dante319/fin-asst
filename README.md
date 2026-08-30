@@ -53,7 +53,49 @@ what `uv.lock` pins, so the environment is reproducible; `uv add <package>`
 updates both the manifest and the lock.
 
 If you prefer an activated shell: `source .venv/bin/activate` after `uv sync`,
-then run `finasst ...` directly.
+then run `finasst ...` directly. Once the environment exists, `.venv/bin/finasst`
+is faster than `uv run finasst`, which re-verifies the project on every call.
+
+### If the project folder is in iCloud Drive (or Dropbox, or OneDrive)
+
+macOS syncs `~/Documents` to iCloud Drive by default, and that combination is
+worth avoiding for two separate reasons.
+
+**The virtualenv.** `.venv` is thousands of small files. Inside a synced folder,
+every Python import competes with the sync daemon, and a first run can stall for
+minutes with no output at all. Keep the code where it is and move the
+environment out:
+
+```bash
+export UV_PROJECT_ENVIRONMENT=~/.venvs/fin-asst   # add to ~/.zshrc to make it stick
+uv sync
+~/.venvs/fin-asst/bin/finasst serve
+```
+
+**The database.** This one matters more. A SQLite file in a continuously-synced
+folder is a genuine corruption risk: the sync daemon can upload a half-written
+database mid-transaction, and two machines can resurrect each other's stale
+copies. So the database defaults to your user data directory, outside the repo:
+
+| Platform | Default location |
+|---|---|
+| macOS | `~/Library/Application Support/fin-asst/finasst.db` |
+| Linux | `~/.local/share/fin-asst/finasst.db` |
+| Windows | `%LOCALAPPDATA%\fin-asst\finasst.db` |
+
+An existing `data/finasst.db` from an earlier version still takes precedence, so
+upgrading never orphans a database you have been using. To move an old one onto
+the new default:
+
+```bash
+mkdir -p ~/Library/Application\ Support/fin-asst
+mv data/finasst.db ~/Library/Application\ Support/fin-asst/finasst.db
+```
+
+`FINASST_DB` overrides the file outright and `FINASST_DATA_DIR` overrides the
+directory, if you would rather put it somewhere specific. Back it up
+deliberately -- copy the file, or re-import your statements, which is
+idempotent.
 
 ## Using your own statements
 
