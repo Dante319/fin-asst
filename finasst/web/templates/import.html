@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Import a statement</h2>
+  <p class="caption">
+    Amex (Cobalt and SimplyCash share one export format) and Simplii are recognised
+    automatically; anything else with a header row falls back to a column-guessing
+    parser. Re-importing a file you have already loaded, or two exports that overlap
+    by a few days, adds nothing twice.
+  </p>
+
+  <form method="post" enctype="multipart/form-data" class="import-form">
+    <label>CSV files
+      <input type="file" name="files" accept=".csv" multiple required>
+    </label>
+    <label>Account name
+      <input type="text" name="account" list="account-list" placeholder="Amex SimplyCash">
+      <datalist id="account-list">
+        {% for a in accounts %}<option value="{{ a.name }}">{% endfor %}
+      </datalist>
+    </label>
+    <label>Format
+      <select name="issuer">
+        <option value="">detect automatically</option>
+        <option value="amex">Amex</option>
+        <option value="simplii">Simplii</option>
+        <option value="generic">generic</option>
+      </select>
+    </label>
+    <label>Account type
+      <select name="kind">
+        <option value="credit">credit card</option>
+        <option value="chequing">chequing</option>
+        <option value="savings">savings</option>
+      </select>
+    </label>
+    <button type="submit">Import</button>
+  </form>
+
+  {% if results %}
+    <h3>Imported</h3>
+    <ul class="results">
+      {% for r in results %}<li>{{ r.summary }}</li>{% endfor %}
+    </ul>
+    {% if stats %}
+      <p>{{ stats.matched }} categorised automatically, {{ stats.unmatched }}
+         <a href="/transactions?only_uncategorised=true">need a look</a>.</p>
+    {% endif %}
+  {% endif %}
+  {% if errors %}
+    <h3>Problems</h3>
+    <ul class="errors">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if accounts %}
+    <h3>Accounts</h3>
+    <table class="tight">
+      <tbody>
+      {% for a in accounts %}
+        <tr><td>{{ a.name }}</td><td class="muted">{{ a.issuer }} / {{ a.kind }}</td>
+            <td class="muted">{{ a.currency }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endblock %}

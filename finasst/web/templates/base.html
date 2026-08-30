@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}fin-asst{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">fin&#8209;asst</a>
+  <nav>
+    <a href="/" class="{{ 'active' if page == 'dashboard' }}">Dashboard</a>
+    <a href="/transactions" class="{{ 'active' if page == 'transactions' }}">Transactions</a>
+    <a href="/goals" class="{{ 'active' if page == 'goals' }}">Goals</a>
+    <a href="/import" class="{{ 'active' if page == 'import' }}">Import</a>
+  </nav>
+  <span class="local-note" title="This server binds to 127.0.0.1 and talks to nothing else.">local only</span>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

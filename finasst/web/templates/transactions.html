@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Transactions</h2>
+    <label class="teach-toggle">
+      <input type="checkbox" id="teach" checked>
+      Learn the merchant when I change a category
+    </label>
+  </div>
+
+  <form method="get" class="filters">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search merchant">
+    <select name="category">
+      <option value="">All categories</option>
+      {% for c in categories %}
+        <option value="{{ c }}" {{ 'selected' if c == category }}>{{ c }}</option>
+      {% endfor %}
+    </select>
+    <select name="month">
+      <option value="">All months</option>
+      {% for m in months_available %}
+        <option value="{{ m }}" {{ 'selected' if m == month }}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <label><input type="checkbox" name="only_uncategorised" value="true"
+                  {{ 'checked' if only_uncategorised }}> Uncategorised only</label>
+    <button type="submit">Filter</button>
+  </form>
+
+  <table id="tx-table">
+    <thead><tr><th>Date</th><th>Merchant</th><th>Account</th><th class="num">Amount</th><th>Category</th></tr></thead>
+    <tbody>
+      {% for tx in rows %}
+        {% include "_tx_row.html" %}
+      {% else %}
+        <tr><td colspan="5" class="muted">Nothing matches those filters.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

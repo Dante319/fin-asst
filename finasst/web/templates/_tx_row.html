@@ -1,0 +1,18 @@
+<tr id="tx-{{ tx.id }}" class="{{ 'flash' if learned is defined }}">
+  <td class="date">{{ tx.date }}</td>
+  <td>
+    {{ tx.description }}
+    {% if learned %}<span class="learned">learned: "{{ learned }}"</span>{% endif %}
+  </td>
+  <td class="muted">{{ tx.account_name }}</td>
+  <td class="num {{ 'inflow' if tx.amount > 0 }}">{{ tx.amount | money2 }}</td>
+  <td>
+    <select class="cat-select" data-tx="{{ tx.id }}">
+      <option value="" {{ 'selected' if not tx.category }}>-- uncategorised --</option>
+      {% for c in categories %}
+        <option value="{{ c }}" {{ 'selected' if c == tx.category }}>{{ c }}</option>
+      {% endfor %}
+    </select>
+    <span class="src src-{{ tx.category_source or 'none' }}">{{ tx.category_source or '' }}</span>
+  </td>
+</tr>
