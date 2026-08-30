@@ -46,14 +46,16 @@ def test_remittance_is_its_own_category(tmp_path):
 
 
 def test_manual_correction_teaches_a_rule_and_back_applies(tmp_path):
+    # A merchant no seed rule matches, so the test exercises teaching rather
+    # than accidentally passing because a rule already covered it.
     conn = setup_conn(tmp_path)
-    a = add_tx(conn, "PAI NORTHERN THAI TORONTO", d="2026-07-01")
-    b = add_tx(conn, "PAI NORTHERN THAI TORONTO", d="2026-07-15")
+    a = add_tx(conn, "ZORBLAX KITCHEN TORONTO", d="2026-07-01")
+    b = add_tx(conn, "ZORBLAX KITCHEN TORONTO", d="2026-07-15")
     categorize_all(conn)
     assert conn.execute("SELECT category FROM transactions WHERE id = ?", (a,)).fetchone()["category"] is None
 
     learned = set_manual_category(conn, a, "Eats & Drinks")
-    assert learned == "pai northern"
+    assert learned == "zorblax kitchen"
     assert conn.execute("SELECT category FROM transactions WHERE id = ?", (b,)).fetchone()["category"] == "Eats & Drinks"
 
 
@@ -68,5 +70,5 @@ def test_manual_categories_survive_a_recategorize(tmp_path):
 
 
 def test_merchant_key_takes_the_stable_leading_words():
-    assert merchant_key("PAI NORTHERN THAI TORONTO") == "pai northern"
+    assert merchant_key("ZORBLAX KITCHEN TORONTO") == "zorblax kitchen"
     assert merchant_key("STARBUCKS #4471") == "starbucks"

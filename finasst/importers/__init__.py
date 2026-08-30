@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from .amex import AmexImporter
+from .amex import AmexImporter, AmexYearEndImporter
 from .base import Importer, ParsedTx, read_rows
 from .generic import GenericImporter
 from .simplii import SimpliiImporter
 
 # Order matters: specific issuers first, generic last as the catch-all.
-IMPORTERS: list[type[Importer]] = [AmexImporter, SimpliiImporter, GenericImporter]
+IMPORTERS: list[type[Importer]] = [AmexYearEndImporter, AmexImporter, SimpliiImporter, GenericImporter]
 BY_NAME = {imp.name: imp for imp in IMPORTERS}
 
 

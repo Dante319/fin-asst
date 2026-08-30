@@ -53,6 +53,8 @@ CATEGORIES = [
     "Utilities",
     "Phone & Internet",
     "Health",
+    "Personal Care",
+    "Insurance",
     "Shopping",
     "Subscriptions",
     "Travel",

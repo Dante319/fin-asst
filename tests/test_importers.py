@@ -94,3 +94,80 @@ def test_overlapping_statements_do_not_double_count(tmp_path):
     assert result.inserted == 1 and result.duplicates == 2
     total = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     assert total == 3
+
+
+# ---------------------------------------------------------------------------
+# Real Amex export shapes, transcribed from actual files
+# ---------------------------------------------------------------------------
+
+AMEX_ACTIVITY_ROWS = [
+    ["Date", "Date Processed", "Description", "Amount"],
+    ["15 Jan 2026", "15 Jan 2026", "MEMBERSHIP FEE INSTALLMENT", "9.99"],
+    ["12 Jan 2026", "12 Jan 2026", "AIRBNB * HMQFNDZMMQ     LONDON", "185.30"],
+    ["05 Jan 2026", "05 Jan 2026", "PAYMENT RECEIVED - THANK YOU", "-817.62"],
+]
+
+AMEX_YEAREND_ROWS = [
+    ["Category", "Sub-Category", "Date", "Month-Billed", "Transaction", "Charges $", "Credits $"],
+    ["Airline", "Airline", "14/09/2025", "September", "ETIHAD AIRWAYS AKLAVIK  AKLAVIK", "2,314.13", ""],
+    ["Financial Services", "Fee Services", "15/12/2025", "December", "MEMBERSHIP FEE INSTALLMENT", "9.99", ""],
+    ["Other", "Other", "03/02/2025", "February", "SOME REFUND", "", "42.50"],
+]
+
+
+def test_real_amex_activity_export_is_detected():
+    """The live export has no 'Card Member' column -- 'Date Processed' is the tell."""
+    from finasst.importers.amex import AmexImporter
+    assert detect(AMEX_ACTIVITY_ROWS) is AmexImporter
+
+
+def test_real_amex_activity_signs_and_dates():
+    from finasst.importers.amex import AmexImporter
+    txs = AmexImporter.parse(AMEX_ACTIVITY_ROWS)
+    assert txs[0].date.isoformat() == "2026-01-15", "'15 Jan 2026' must parse"
+    assert txs[0].amount == -9.99, "a fee is money leaving"
+    assert txs[2].amount == 817.62, "a card payment is money arriving"
+
+
+def test_year_end_summary_is_detected_before_the_generic_fallback():
+    from finasst.importers.amex import AmexYearEndImporter
+    assert detect(AMEX_YEAREND_ROWS) is AmexYearEndImporter
+
+
+def test_year_end_dates_are_day_first():
+    """03/02/2025 is 3 February. Read month-first it would land in January."""
+    from finasst.importers.amex import AmexYearEndImporter
+    txs = AmexYearEndImporter.parse(AMEX_YEAREND_ROWS)
+    refund = [t for t in txs if t.amount > 0][0]
+    assert refund.date.isoformat() == "2025-02-03"
+    assert refund.amount == 42.50
+
+
+def test_year_end_charges_and_credits_split():
+    from finasst.importers.amex import AmexYearEndImporter
+    txs = AmexYearEndImporter.parse(AMEX_YEAREND_ROWS)
+    assert txs[0].amount == -2314.13, "thousands separator, and a charge is negative"
+    assert txs[0].extra["amex_category"] == "Airline"
+
+
+def test_the_same_charge_in_both_export_formats_deduplicates(tmp_path):
+    """The year-end file and the activity file overlap by two weeks in December.
+
+    The activity export appends the merchant address to the raw text and the
+    year-end file does not, so the fingerprint has to work off the cleaned
+    merchant or that fortnight gets counted twice.
+    """
+    activity = write_csv(tmp_path, "activity.csv", [
+        ["Date", "Date Processed", "Description", "Amount"],
+        ["15 Dec 2025", "15 Dec 2025", "MEMBERSHIP FEE INSTALLMENT", "9.99"],
+    ])
+    yearend = write_csv(tmp_path, "yearend.csv", [
+        ["Category", "Sub-Category", "Date", "Month-Billed", "Transaction", "Charges $", "Credits $"],
+        ["Financial Services", "Fee Services", "15/12/2025", "December", "MEMBERSHIP FEE INSTALLMENT", "9.99", ""],
+    ])
+    conn = db.connect(tmp_path / "t.db")
+    db.init_db(conn)
+    import_csv(conn, activity, account_name="Amex")
+    result = import_csv(conn, yearend, account_name="Amex")
+    assert result.duplicates == 1 and result.inserted == 0
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 1

@@ -29,16 +29,23 @@ class ParsedTx:
         """Stable identity for a transaction.
 
         Re-importing an overlapping statement must not duplicate rows, so the
-        fingerprint covers everything the issuer gives us that identifies the
-        charge. Two genuinely identical same-day charges (two $5 coffees at the
-        same shop) collapse into one -- an accepted trade-off, and the
-        alternative (importing a statement twice and silently doubling your
-        spend) is far worse.
+        fingerprint is account + date + cleaned merchant + amount.
+
+        It deliberately uses the CLEANED description rather than the raw one.
+        The same charge can appear in two different Amex exports with different
+        raw text -- the activity export appends the merchant address, the
+        year-end summary does not -- and those two files overlap by a couple of
+        weeks in December. Fingerprinting the raw string would let that fortnight
+        be counted twice.
+
+        Two genuinely identical same-day charges (two $5 coffees at the same
+        shop) collapse into one. That is the accepted trade-off, and it is far
+        better than silently doubling a month of spending.
         """
         key = "|".join([
             account_name.strip().lower(),
             self.date.isoformat(),
-            re.sub(r"\s+", " ", self.raw_description.strip().lower()),
+            re.sub(r"\s+", " ", self.description.strip().lower()),
             f"{self.amount:.2f}",
         ])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]

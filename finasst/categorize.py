@@ -79,6 +79,7 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("fitness", "contains", "Health", 60),
 
     ("amazon", "contains", "Shopping", 55),
+    ("amzn", "contains", "Shopping", 55),
     ("canadian tire", "contains", "Shopping", 50),
     ("ikea", "contains", "Shopping", 50),
     ("best buy", "contains", "Shopping", 50),
@@ -114,6 +115,8 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("cineplex", "contains", "Entertainment", 45),
     ("tiff", "contains", "Entertainment", 45),
     ("ticketmaster", "contains", "Entertainment", 45),
+    ("dice.fm", "contains", "Entertainment", 40),
+    ("eventbrite", "contains", "Entertainment", 45),
     ("steam", "contains", "Entertainment", 50),
     ("playstation", "contains", "Entertainment", 45),
     ("nintendo", "contains", "Entertainment", 45),
@@ -141,6 +144,83 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("etransfer", "contains", "Transfer", 40),
     ("transfer to", "contains", "Transfer", 40),
     ("transfer from", "contains", "Transfer", 40),
+
+    # --- meal-kit and delivery services ---
+    # Filed as Groceries because they replace a grocery shop rather than a meal
+    # out. One line to move to "Eats & Drinks" if you disagree.
+    ("chefs plate", "contains", "Groceries", 35),
+    ("chef's plate", "contains", "Groceries", 35),
+    ("factor", "contains", "Groceries", 45),
+    ("hellofresh", "contains", "Groceries", 35),
+    ("goodfood", "contains", "Groceries", 35),
+
+    # --- telecom ---
+    ("fido", "contains", "Phone & Internet", 35),
+    ("virgin plus", "contains", "Phone & Internet", 35),
+    ("chatr", "contains", "Phone & Internet", 35),
+
+    # --- insurance ---
+    ("square one insurance", "contains", "Insurance", 30),
+    ("insurance", "contains", "Insurance", 60),
+    ("sonnet", "contains", "Insurance", 45),
+    ("intact", "contains", "Insurance", 45),
+
+    # --- personal care ---
+    ("barber", "contains", "Personal Care", 45),
+    ("salon", "contains", "Personal Care", 50),
+    ("spa ", "contains", "Personal Care", 55),
+
+    # --- entertainment ---
+    ("toronto international f", "contains", "Entertainment", 35),  # TIFF
+    ("ultimate challenge", "contains", "Entertainment", 45),
+    ("escape room", "contains", "Entertainment", 45),
+
+    # --- health and supplements ---
+    ("naked nutrition", "contains", "Health", 40),
+    ("myprotein", "contains", "Health", 40),
+    ("vitamin", "contains", "Health", 55),
+
+    # --- housing and home services ---
+    ("condos", "contains", "Housing", 45),
+    ("taskrabbit", "contains", "Housing", 40),
+    ("struc-tube", "contains", "Shopping", 40),
+    ("structube", "contains", "Shopping", 40),
+    ("wayfair", "contains", "Shopping", 45),
+    ("home depot", "contains", "Shopping", 45),
+    ("rona", "contains", "Shopping", 50),
+
+    # --- retail ---
+    ("holt renfrew", "contains", "Shopping", 45),
+    ("apple store", "contains", "Shopping", 40),
+    ("adidas", "contains", "Shopping", 45),
+    ("decathlon", "contains", "Shopping", 45),
+    ("nike", "contains", "Shopping", 45),
+    ("zara", "contains", "Shopping", 50),
+    ("h&m", "contains", "Shopping", 50),
+    ("sephora", "contains", "Personal Care", 45),
+    ("fab india", "contains", "Shopping", 45),
+    ("fabindia", "contains", "Shopping", 45),
+    ("gift shop", "contains", "Shopping", 60),
+    ("stag shop", "contains", "Shopping", 45),
+
+    # --- eats ---
+    ("the keg", "contains", "Eats & Drinks", 45),
+    ("keg -", "contains", "Eats & Drinks", 45),
+    ("chipotle", "contains", "Eats & Drinks", 45),
+    ("mcdonald", "contains", "Eats & Drinks", 45),
+    ("subway", "contains", "Eats & Drinks", 50),
+    ("sushi", "contains", "Eats & Drinks", 55),
+    ("hot pot", "contains", "Eats & Drinks", 55),
+    ("momos", "contains", "Eats & Drinks", 55),
+    ("thai", "contains", "Eats & Drinks", 60),
+    ("bakery", "contains", "Eats & Drinks", 55),
+    ("brewery", "contains", "Eats & Drinks", 55),
+    ("bar &", "contains", "Eats & Drinks", 60),
+
+    # --- fees ---
+    ("membership fee", "contains", "Fees & Interest", 30),
+    ("returned payment", "contains", "Transfer", 25),
+    ("balance transfer", "contains", "Transfer", 30),
 
     ("wealthsimple", "contains", "Savings & Investments", 35),
     ("questrade", "contains", "Savings & Investments", 35),
