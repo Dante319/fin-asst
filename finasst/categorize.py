@@ -55,7 +55,7 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("green p", "contains", "Transport", 50),
     ("parking", "contains", "Transport", 60),
 
-    ("rent", "contains", "Housing", 40),
+    (r"\brent\b", "regex", "Housing", 30),
     ("property tax", "contains", "Housing", 40),
     ("condo fee", "contains", "Housing", 40),
 
@@ -135,8 +135,8 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("direct deposit", "contains", "Income", 35),
     ("polyai", "contains", "Income", 30),
 
-    ("payment thank you", "contains", "Transfer", 30),
-    ("payment - thank you", "contains", "Transfer", 30),
+    ("thank you", "contains", "Transfer", 25),      # card payment, not income
+    ("payment received", "contains", "Transfer", 25),
     ("e-transfer", "contains", "Transfer", 40),
     ("etransfer", "contains", "Transfer", 40),
     ("transfer to", "contains", "Transfer", 40),
