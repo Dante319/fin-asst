@@ -1,0 +1,27 @@
+# Financial data never goes in git
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+!tests/fixtures/*.csv
+!scripts/samples/*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Local config that may hold personal values
+config.local.toml
