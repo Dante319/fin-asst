@@ -222,9 +222,33 @@ def cmd_whatif(args) -> int:
 
 
 def cmd_serve(args) -> int:
+    """Start the local web app.
+
+    The port is checked before anything is printed: announcing a URL that turns
+    out not to be listening sends you hunting through the browser instead of the
+    one line of terminal output that explains it.
+    """
+    import socket
     import uvicorn
-    print(f"fin-asst running at http://{args.host}:{args.port}  (ctrl-c to stop)")
-    uvicorn.run("finasst.web.app:app", host=args.host, port=args.port, reload=args.reload)
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe.bind((args.host, args.port))
+    except OSError as exc:
+        print(f"Cannot start on {args.host}:{args.port} -- {exc.strerror}.", file=sys.stderr)
+        print(f"Something else is using that port. Try: finasst serve --port {args.port + 1}",
+              file=sys.stderr)
+        return 1
+    finally:
+        probe.close()
+
+    print(f"fin-asst starting on http://{args.host}:{args.port}", flush=True)
+    print("Open that in a browser. Type the http:// prefix -- browsers that default",
+          flush=True)
+    print("to https will fail against a plain local server. Ctrl-C to stop.\n", flush=True)
+    uvicorn.run("finasst.web.app:app", host=args.host, port=args.port,
+                reload=args.reload, log_level="info")
     return 0
 
 
