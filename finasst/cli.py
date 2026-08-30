@@ -229,7 +229,11 @@ def cmd_serve(args) -> int:
     one line of terminal output that explains it.
     """
     import socket
+    import time
+
+    t0 = time.monotonic()
     import uvicorn
+    load = time.monotonic() - t0
 
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -243,6 +247,9 @@ def cmd_serve(args) -> int:
     finally:
         probe.close()
 
+    if load > 2:
+        print(f"(uvicorn took {load:.1f}s to import -- if that keeps happening, the "
+              f"virtualenv is on a slow or synced filesystem)", flush=True)
     print(f"fin-asst starting on http://{args.host}:{args.port}", flush=True)
     print("Open that in a browser. Type the http:// prefix -- browsers that default",
           flush=True)
