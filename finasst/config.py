@@ -61,6 +61,7 @@ CATEGORIES = [
     "Entertainment",
     "Remittance",
     "Fees & Interest",
+    "Debt Payment",
     "Income",
     "Transfer",
     "Savings & Investments",

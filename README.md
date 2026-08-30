@@ -106,6 +106,8 @@ automatically, plus a fallback:
 |---|---|
 | **Amex Canada** | One export format across Cobalt and SimplyCash. Amex writes a purchase as a positive number; the importer flips it so an outflow is always negative. |
 | **Simplii** | Headerless CIBC-style layout: date, details, funds out, funds in, balance. |
+| **Amex year-end summary** | A whole year in one file, with Amex's own categories. Dates are DD/MM/YYYY and are parsed as such rather than guessed. |
+| **EQ Bank** | PDF statements, since EQ has no CSV export. Text is extracted and every statement must reconcile: opening balance + every parsed transaction has to equal the stated closing balance, or the import is refused. |
 | **Anything else** | Column-guessing fallback. Needs a header row with a recognisable date column and either a signed amount or debit/credit columns. |
 
 Re-importing a file you have already loaded does nothing, and two exports that

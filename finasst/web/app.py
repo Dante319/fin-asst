@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from .. import analytics, config, db
 from ..categorize import categorize_all, seed_rules, set_manual_category
 from ..goals import Goal, add_goal, compare, load_goals, project
-from ..importers import import_csv
+from ..importers import import_file
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -175,7 +175,7 @@ async def do_import(
         with open(tmp, "wb") as fh:
             shutil.copyfileobj(upload.file, fh)
         try:
-            results.append(import_csv(
+            results.append(import_file(
                 conn, tmp,
                 account_name=account.strip() or Path(upload.filename).stem,
                 issuer=issuer or None, kind=kind,

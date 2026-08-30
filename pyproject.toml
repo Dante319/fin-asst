@@ -9,6 +9,7 @@ dependencies = [
     "uvicorn>=0.27",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
+    "pypdf>=4.0",
 ]
 
 [project.scripts]

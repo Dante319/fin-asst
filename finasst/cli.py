@@ -21,7 +21,7 @@ from pathlib import Path
 from . import analytics, config, db
 from .categorize import categorize_all, seed_rules, set_manual_category
 from .goals import Goal, add_goal, compare, load_goals, project
-from .importers import import_csv
+from .importers import import_file
 
 
 def _money(x: float) -> str:
@@ -54,7 +54,7 @@ def cmd_import(args) -> int:
         if not path.exists():
             print(f"  ! {path} does not exist", file=sys.stderr)
             continue
-        result = import_csv(
+        result = import_file(
             conn, path, account_name=args.account or path.stem,
             issuer=args.issuer, kind=args.kind, currency=args.currency,
         )
@@ -269,10 +269,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init", help="create the database and seed rules").set_defaults(func=cmd_init)
 
-    imp = sub.add_parser("import", help="import one or more CSV statements")
+    imp = sub.add_parser("import", help="import statements (CSV exports or EQ Bank PDFs)")
     imp.add_argument("files", nargs="+")
     imp.add_argument("--account", help="account name these rows belong to")
-    imp.add_argument("--issuer", choices=["amex", "simplii", "generic"], help="force a parser")
+    imp.add_argument("--issuer", choices=["amex", "amex-yearend", "simplii", "eqbank", "generic"],
+                     help="force a parser instead of detecting it")
     imp.add_argument("--kind", default="credit", choices=["credit", "chequing", "savings"])
     imp.add_argument("--currency", default="CAD")
     imp.set_defaults(func=cmd_import)

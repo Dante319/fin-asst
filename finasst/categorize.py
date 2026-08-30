@@ -121,6 +121,7 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("playstation", "contains", "Entertainment", 45),
     ("nintendo", "contains", "Entertainment", 45),
 
+    ("international transfer", "contains", "Remittance", 25),
     ("wise", "contains", "Remittance", 35),
     ("remitly", "contains", "Remittance", 35),
     ("western union", "contains", "Remittance", 35),
@@ -128,10 +129,21 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("moneygram", "contains", "Remittance", 35),
     ("instarem", "contains", "Remittance", 35),
 
+    # Interest RECEIVED is income; interest CHARGED is a cost. Order matters.
+    ("interest received", "contains", "Income", 25),
+    ("interest earned", "contains", "Income", 25),
     ("interest", "contains", "Fees & Interest", 60),
     ("annual fee", "contains", "Fees & Interest", 40),
     ("foreign transaction fee", "contains", "Fees & Interest", 40),
     ("nsf fee", "contains", "Fees & Interest", 40),
+
+    # --- debt servicing: not discretionary spending, and not a transfer either ---
+    ("line of cr", "contains", "Debt Payment", 25),
+    ("auto-withdrawal by nbc", "contains", "Debt Payment", 25),
+    ("loan payment", "contains", "Debt Payment", 30),
+    ("student loan", "contains", "Debt Payment", 25),
+    ("nslsc", "contains", "Debt Payment", 25),
+    ("osap", "contains", "Debt Payment", 25),
     ("overlimit", "contains", "Fees & Interest", 40),
 
     ("payroll", "contains", "Income", 30),
@@ -140,6 +152,8 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
 
     ("thank you", "contains", "Transfer", 25),      # card payment, not income
     ("payment received", "contains", "Transfer", 25),
+    ("card load", "contains", "Transfer", 30),
+    ("transfer from card", "contains", "Transfer", 30),
     ("e-transfer", "contains", "Transfer", 40),
     ("etransfer", "contains", "Transfer", 40),
     ("transfer to", "contains", "Transfer", 40),
