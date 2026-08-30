@@ -25,23 +25,35 @@ output is how many months each goal *slips* — not a comforting per-goal figure
 
 ## Quick start
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). It handles the
+Python version, the virtualenv and the lockfile in one tool, and it sidesteps
+the "externally-managed-environment" wall that macOS system Python puts in front
+of `pip install`.
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+brew install uv          # or: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+cd fin-asst
+uv sync                  # creates .venv and installs from uv.lock
 
 # Try it on synthetic data first (fake, committed to the repo on purpose)
-python scripts/gen_synthetic.py
-finasst init
-finasst import scripts/samples/sample_amex_simplycash.csv --account "Amex SimplyCash"
-finasst import scripts/samples/sample_simplii_chequing.csv --account "Simplii Chequing" --kind chequing
-finasst summary
+uv run python scripts/gen_synthetic.py
+uv run finasst init
+uv run finasst import scripts/samples/sample_amex_simplycash.csv --account "Amex SimplyCash"
+uv run finasst import scripts/samples/sample_simplii_chequing.csv --account "Simplii Chequing" --kind chequing
+uv run finasst summary
 
 # Then the web app
-finasst serve            # http://127.0.0.1:8000
+uv run finasst serve     # http://127.0.0.1:8000
 ```
 
-Run `pip install -e .` to get the `finasst` command on your PATH; otherwise use
-`python -m finasst.cli ...`.
+`uv run` puts the command in the project environment for you, so there is no
+venv to activate and nothing to install globally. `uv sync` installs exactly
+what `uv.lock` pins, so the environment is reproducible; `uv add <package>`
+updates both the manifest and the lock.
+
+If you prefer an activated shell: `source .venv/bin/activate` after `uv sync`,
+then run `finasst ...` directly.
 
 ## Using your own statements
 
@@ -114,6 +126,8 @@ finasst/
   web/             FastAPI app, Jinja templates, one CSS file, ~25 lines of JS
 scripts/           synthetic statement generator + samples
 tests/             24 tests: sign conventions, dedup, rule precedence, goal maths
+pyproject.toml     dependencies and the finasst entry point
+uv.lock            exact pinned versions -- committed, so the environment is reproducible
 ```
 
 The front end has no build step, no npm and no CDN — the page loads with the
@@ -122,7 +136,7 @@ machine offline.
 ## Tests
 
 ```bash
-python -m pytest
+uv run pytest
 ```
 
 ## Not doing (and why)
