@@ -1,7 +1,5 @@
 # Financial data never goes in git
 data/
-statements/*
-!statements/README.md
 *.db
 *.sqlite
 *.sqlite3
