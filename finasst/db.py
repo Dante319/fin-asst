@@ -71,7 +71,41 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- One row per money-transfer-abroad, tied to the transaction that paid for it.
+-- The CAD side is imported; the INR side has to come from you, because no
+-- statement records what actually landed at the other end.
+CREATE TABLE IF NOT EXISTS remittances (
+    id            INTEGER PRIMARY KEY,
+    tx_id         INTEGER NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
+    sent_amount   REAL NOT NULL,           -- CAD leaving the account, positive
+    received      REAL,                    -- INR actually credited, if you know it
+    received_ccy  TEXT NOT NULL DEFAULT 'INR',
+    fee           REAL,                    -- explicit fee, when the provider states one
+    provider      TEXT,
+    notes         TEXT,
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Cached reference rates. Populated only by an explicit `finasst fx sync`;
+-- nothing in this app reaches the network on its own.
+CREATE TABLE IF NOT EXISTS fx_rates (
+    date   TEXT NOT NULL,
+    base   TEXT NOT NULL,
+    quote  TEXT NOT NULL,
+    rate   REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'ecb',
+    PRIMARY KEY (date, base, quote)
+);
 """
+
+# Columns added after the first release. SQLite has no "ADD COLUMN IF NOT
+# EXISTS", so they are applied one at a time and duplicates ignored.
+MIGRATIONS = [
+    # Links an outgoing transaction to the incoming one in another account that
+    # it turned out to be. Set by the transfer matcher, not by importers.
+    ("transactions", "transfer_peer_id", "INTEGER"),
+]
 
 DEFAULT_SETTINGS = {
     "annual_return_rate": "0.04",   # what savings earn, nominal
@@ -89,8 +123,20 @@ def connect(path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+def apply_migrations(conn: sqlite3.Connection) -> None:
+    existing = {
+        table: {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for table in {t for t, _, _ in MIGRATIONS}
+    }
+    for table, column, decl in MIGRATIONS:
+        if column not in existing.get(table, set()):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    conn.commit()
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    apply_migrations(conn)
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (key, value)

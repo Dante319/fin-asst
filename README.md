@@ -118,6 +118,37 @@ The one deliberate trade-off: two genuinely identical charges on the same day at
 the same merchant for the same amount collapse into one. Silently doubling your
 spending when you re-import a statement would be the worse failure.
 
+## Knowing what the numbers do not cover
+
+Two features exist because a finance tool that quietly reports on partial data is
+worse than one that reports nothing.
+
+**Coverage.** `finasst coverage` matches outgoing transfers against the incoming
+side in another account and reports everything left over -- money that went
+somewhere no statement covers. It is shown on the dashboard next to your
+spending, so the size of the blind spot is never hidden. Importing the account on
+the receiving end turns a gap into a matched internal movement.
+
+**Income regimes.** The surplus is an average over recent months. If a income
+stream ended partway through those months, that average describes a situation
+that no longer exists, so the app says so rather than projecting from it.
+
+## Remittances
+
+For money sent abroad, a statement records only the CAD that left. What arrived
+has to come from you, and without it the true cost is unknowable -- a transfer
+advertising "no fee" still takes its margin in the exchange rate.
+
+```bash
+finasst fx list                          # every transfer; blanks are what is missing
+finasst fx set 412 --received 61200      # what actually landed, in INR
+finasst fx rates                         # optional reference rates (ECB, free, no account)
+finasst fx report                        # blended rate and what the spread cost
+```
+
+`finasst fx rates` is the only command in this app that uses the network, and it
+only ever fetches published exchange rates -- never anything about you.
+
 ## Commands
 
 ```
@@ -127,6 +158,8 @@ finasst categorize [--recategorize]
 finasst review                     what no rule matched
 finasst set ID "Category"          fix one, and teach the merchant
 finasst summary [--month] [--months N]
+finasst coverage [--since YYYY-MM-DD]
+finasst fx list | set ID --received N | rates | report
 finasst goal add NAME --amount N --date YYYY-MM-DD [--priority N] [--monthly-min N]
 finasst goals
 finasst project [--surplus N]

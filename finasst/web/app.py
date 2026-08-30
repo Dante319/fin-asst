@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import analytics, config, db
+from .. import analytics, config, coverage, db, remittance
 from ..categorize import categorize_all, seed_rules, set_manual_category
 from ..goals import Goal, add_goal, compare, load_goals, project
 from ..importers import import_file
@@ -68,8 +68,13 @@ def dashboard(request: Request, month: Optional[str] = None, months: int = 1):
     selected = month or (available[0] if available else None)
     surplus, basis, warning = _surplus(conn)
 
+    coverage.match_internal_transfers(conn)
+    cov = coverage.coverage(conn)
+
     return templates.TemplateResponse(request, "dashboard.html", {
         "page": "dashboard",
+        "coverage": cov,
+        "income_warning": coverage.income_regime_warning(conn),
         "has_data": bool(totals),
         "months_available": available,
         "selected_month": selected,
@@ -191,6 +196,43 @@ async def do_import(
         "accounts": db.accounts(conn),
         "results": results, "errors": errors, "stats": stats,
     })
+
+
+# --------------------------------------------------------------------------
+# Remittances
+# --------------------------------------------------------------------------
+
+@app.get("/remittances", response_class=HTMLResponse)
+def remittances_page(request: Request):
+    conn = get_conn()
+    remittance.sync_from_transactions(conn)
+    rep = remittance.report(conn)
+    return templates.TemplateResponse(request, "remittances.html", {
+        "page": "remittances", "report": rep,
+    })
+
+
+@app.post("/remittances/{tx_id}")
+def record_remittance(
+    tx_id: int,
+    received: float = Form(...),
+    currency: str = Form("INR"),
+    provider: str = Form(""),
+):
+    conn = get_conn()
+    remittance.sync_from_transactions(conn)
+    remittance.set_received(conn, tx_id, received, provider=provider or None, currency=currency)
+    return RedirectResponse("/remittances", status_code=303)
+
+
+@app.post("/remittances/rates/fetch")
+def fetch_reference_rates():
+    """The only route in the app that touches the network, and only when clicked."""
+    conn = get_conn()
+    remittance.sync_from_transactions(conn)
+    rep = remittance.report(conn)
+    remittance.fetch_rates(conn, [t.date for t in rep.transfers])
+    return RedirectResponse("/remittances", status_code=303)
 
 
 # --------------------------------------------------------------------------

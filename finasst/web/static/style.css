@@ -94,7 +94,7 @@ h3 { font-size: 14px; margin: 20px 0 8px; color: var(--text-secondary); }
 }
 
 /* ---- stat tiles ---- */
-.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin-bottom: 20px; }
 .stat {
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px;
@@ -131,6 +131,13 @@ h3 { font-size: 14px; margin: 20px 0 8px; color: var(--text-secondary); }
 .hbar-row { display: grid; grid-template-columns: 150px 1fr 150px; align-items: center; gap: 12px; font-size: 13px; }
 .hbar-track { background: var(--surface-2); border-radius: 4px; height: 16px; overflow: hidden; }
 .hbar-fill { display: block; height: 100%; background: var(--series-1); border-radius: 4px; }
+.hbar-fill.gap { background: var(--series-2); }
+.panel.coverage { border-left: 3px solid var(--series-2); }
+/* Destination names share a long prefix ("Interac e-Transfer sent to ..."), so
+   the distinguishing part is at the END. Give them room and clip the front. */
+.panel.coverage .hbar-row { grid-template-columns: 260px 1fr 130px; }
+.panel.coverage .hbar-label { direction: rtl; text-align: left; }
+.panel.coverage .hbar-label::after { content: "\200E"; }
 .hbar-value { text-align: right; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .hbar-value em { color: var(--text-muted); font-style: normal; margin-left: 6px; }
 .hbar-label { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

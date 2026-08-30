@@ -18,7 +18,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from . import analytics, config, db
+from . import analytics, config, coverage, db, remittance
 from .categorize import categorize_all, seed_rules, set_manual_category
 from .goals import Goal, add_goal, compare, load_goals, project
 from .importers import import_file
@@ -122,6 +122,114 @@ def cmd_summary(args) -> int:
     print(f"\nAverage monthly surplus ({', '.join(avg['basis']) or 'n/a'}): {_money(avg['surplus'])}")
     if avg.get("warning"):
         print(f"  Note: {avg['warning']}")
+
+    coverage.match_internal_transfers(conn)
+    cov = coverage.coverage(conn)
+    if cov.unmatched_outflow > 0.01:
+        print(f"\n  ! {cov.verdict()}")
+        print("    Run `finasst coverage` for the detail.")
+    regime = coverage.income_regime_warning(conn)
+    if regime:
+        print(f"\n  ! {regime}")
+    return 0
+
+
+def cmd_coverage(args) -> int:
+    conn = _conn()
+    match = coverage.match_internal_transfers(conn)
+    cov = coverage.coverage(conn, since=args.since)
+    print(f"Accounts imported: {', '.join(cov.accounts) or 'none'}")
+    if match.matched_pairs:
+        print(f"Matched {match.matched_pairs} internal transfers "
+              f"({_money(match.matched_amount)}) between your own accounts.")
+    print()
+    print(cov.verdict())
+    if cov.destinations:
+        print("\nWhere unmatched money went:")
+        for d in cov.destinations:
+            print(f"  {_money(d['amount']):>12}  x{d['count']:<3} {d['destination'][:48]}")
+        print("\nImport the account on the receiving end and these stop being a gap.")
+    warning = coverage.income_regime_warning(conn)
+    if warning:
+        print(f"\nIncome: {warning}")
+    return 0
+
+
+def cmd_fx_list(args) -> int:
+    conn = _conn()
+    created = remittance.sync_from_transactions(conn)
+    if created:
+        print(f"Added {created} transfers to the ledger.\n")
+    rep = remittance.report(conn)
+    if not rep.transfers:
+        print(rep.coverage_note())
+        return 0
+    print("   id  date        sent        received      rate    vs mid   cost")
+    print("-" * 72)
+    for t in rep.transfers:
+        rate = f"{t.effective_rate:,.2f}" if t.effective_rate else "-"
+        spread = f"{t.spread_pct:+.1f}%" if t.spread_pct is not None else "-"
+        cost = _money(t.cost_cad) if t.cost_cad is not None else "-"
+        recv = f"{t.received:,.0f} {t.currency}" if t.received else "not recorded"
+        print(f"  {t.tx_id:>4}  {t.date}  {_money(t.sent):>9}  {recv:>16}  {rate:>8}  {spread:>7}  {cost:>8}")
+    print()
+    print(rep.coverage_note())
+    return 0
+
+
+def cmd_fx_set(args) -> int:
+    conn = _conn()
+    remittance.sync_from_transactions(conn)
+    remittance.set_received(conn, args.tx_id, args.received, fee=args.fee,
+                            provider=args.provider, currency=args.currency)
+    rep = remittance.report(conn)
+    t = next((x for x in rep.transfers if x.tx_id == args.tx_id), None)
+    if t and t.effective_rate:
+        line = f"Transfer {args.tx_id}: {_money(t.sent)} -> {t.received:,.0f} {t.currency} " \
+               f"= {t.effective_rate:,.2f} {t.currency}/CAD"
+        if t.spread_pct is not None:
+            line += f", {t.spread_pct:+.1f}% against the reference rate ({_money(t.cost_cad)})"
+        else:
+            line += ". Run `finasst fx rates` for a mid-market comparison."
+        print(line)
+    return 0
+
+
+def cmd_fx_rates(args) -> int:
+    conn = _conn()
+    remittance.sync_from_transactions(conn)
+    rep = remittance.report(conn)
+    dates = [t.date for t in rep.transfers]
+    if not dates:
+        print("No remittances to price.")
+        return 0
+    print(f"Fetching reference rates for {len(set(dates))} dates "
+          f"(European Central Bank, via frankfurter.app -- free, no account)...")
+    stored, errors = remittance.fetch_rates(conn, dates, quote=args.currency)
+    print(f"Stored {stored} rates.")
+    for e in errors[:5]:
+        print(f"  ! {e}")
+    if errors:
+        print("  Reference rates are optional -- effective rates still work without them.")
+    return 0
+
+
+def cmd_fx_report(args) -> int:
+    conn = _conn()
+    remittance.sync_from_transactions(conn)
+    rep = remittance.report(conn)
+    print(f"Remittances: {len(rep.transfers)} transfers, {_money(rep.total_sent)} sent")
+    if rep.priced:
+        print(f"Received:    {rep.total_received:,.0f} {rep.priced[0].currency}")
+        print(f"Blended rate: {rep.blended_rate:,.2f} {rep.priced[0].currency} per CAD")
+        if rep.total_cost is not None:
+            pct = 100 * rep.total_cost / sum(t.sent for t in rep.priced)
+            print(f"Cost of the spread: {_money(rep.total_cost)} ({pct:.1f}% of what you sent)")
+    print()
+    print(rep.coverage_note())
+    if rep.missing_received:
+        ids = ", ".join(str(t.tx_id) for t in rep.missing_received[:8])
+        print(f"Missing a received amount: {ids}{' ...' if len(rep.missing_received) > 8 else ''}")
     return 0
 
 
@@ -291,6 +399,27 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("category")
     st.add_argument("--no-teach", action="store_true", help="do not create a rule from this")
     st.set_defaults(func=cmd_set)
+
+    cv = sub.add_parser("coverage", help="how much of your money the app can actually see")
+    cv.add_argument("--since", help="only consider transactions on or after this date")
+    cv.set_defaults(func=cmd_coverage)
+
+    fx = sub.add_parser("fx", help="remittance and exchange-rate ledger")
+    fxsub = fx.add_subparsers(dest="fx_command", required=True)
+    fxl = fxsub.add_parser("list", help="every transfer, and what it really cost")
+    fxl.set_defaults(func=cmd_fx_list)
+    fxs = fxsub.add_parser("set", help="record what actually arrived at the other end")
+    fxs.add_argument("tx_id", type=int)
+    fxs.add_argument("--received", type=float, required=True, help="amount credited, in the destination currency")
+    fxs.add_argument("--currency", default="INR")
+    fxs.add_argument("--fee", type=float)
+    fxs.add_argument("--provider")
+    fxs.set_defaults(func=cmd_fx_set)
+    fxr = fxsub.add_parser("rates", help="fetch reference mid-market rates (the only command that uses the network)")
+    fxr.add_argument("--currency", default="INR")
+    fxr.set_defaults(func=cmd_fx_rates)
+    fxp = fxsub.add_parser("report", help="totals, blended rate, and what the spread cost")
+    fxp.set_defaults(func=cmd_fx_report)
 
     sm = sub.add_parser("summary", help="monthly totals and category breakdown")
     sm.add_argument("--month")

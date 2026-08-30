@@ -33,6 +33,31 @@
 </section>
 
 {% if surplus_warning %}<p class="warning">{{ surplus_warning }}</p>{% endif %}
+{% if income_warning %}<p class="warning"><strong>Income changed.</strong> {{ income_warning }}</p>{% endif %}
+
+{% if coverage.unmatched_outflow > 0.01 %}
+<section class="panel coverage">
+  <h2>What this app cannot see</h2>
+  <p class="caption">{{ coverage.verdict() }}</p>
+  <div class="hbars">
+    {% set top = coverage.destinations[0].amount %}
+    {% for d in coverage.destinations %}
+    <div class="hbar-row">
+      <span class="hbar-label" title="{{ d.destination }}">{{ d.destination }}</span>
+      <span class="hbar-track">
+        <span class="hbar-fill gap" style="width: {{ (100 * d.amount / top) | round(1) }}%"></span>
+      </span>
+      <span class="hbar-value">{{ d.amount | money }} <em>&times;{{ d.count }}</em></span>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="caption" style="margin-top:14px">
+    Import the account on the receiving end and these stop being a gap: matched
+    pairs are recognised as one internal movement instead of money leaving.
+    Currently tracking {{ coverage.accounts | join(', ') }}.
+  </p>
+</section>
+{% endif %}
 
 <section class="panel viz-root">
   <h2>Income, spending and surplus by month</h2>
