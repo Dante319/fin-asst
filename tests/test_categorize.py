@@ -72,3 +72,41 @@ def test_manual_categories_survive_a_recategorize(tmp_path):
 def test_merchant_key_takes_the_stable_leading_words():
     assert merchant_key("ZORBLAX KITCHEN TORONTO") == "zorblax kitchen"
     assert merchant_key("STARBUCKS #4471") == "starbucks"
+
+
+# --------------------------------------------------------- category groups --
+
+def test_every_spend_category_belongs_to_a_group():
+    """A new category with no group would silently render neutral grey.
+
+    Colour on the dashboard encodes the group, so an ungrouped category is a
+    bar that looks like "we could not classify this" when in fact we could.
+    """
+    from finasst import config
+
+    ungrouped = [
+        c for c in config.CATEGORIES
+        if c not in config.NON_SPEND_CATEGORIES and c not in config.CATEGORY_GROUPS
+    ]
+    assert ungrouped == [], f"no group for: {ungrouped}"
+
+
+def test_groups_used_are_the_ones_declared_in_group_order():
+    from finasst import config
+
+    assert set(config.CATEGORY_GROUPS.values()) == set(config.GROUP_ORDER)
+
+
+def test_non_spend_categories_are_not_grouped():
+    """Income and transfers are not spending and must never colour a spend bar."""
+    from finasst import config
+
+    for category in config.NON_SPEND_CATEGORIES:
+        assert config.group_of(category) == config.UNGROUPED
+
+
+def test_group_of_handles_unknown_and_none():
+    from finasst import config
+
+    assert config.group_of(None) == config.UNGROUPED
+    assert config.group_of("Something new") == config.UNGROUPED

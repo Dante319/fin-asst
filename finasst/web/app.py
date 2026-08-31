@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .. import analytics, config, coverage, db, remittance
+from . import charts
 from ..categorize import categorize_all, seed_rules, set_manual_category
 from ..goals import Goal, add_goal, compare, load_goals, project
 from ..importers import import_file
@@ -26,6 +27,22 @@ BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["money"] = lambda v: f"${v:,.0f}" if v is not None else "-"
 templates.env.filters["money2"] = lambda v: f"${v:,.2f}" if v is not None else "-"
+
+
+def _group_class(group: str) -> str:
+    """CSS class for a spend group.
+
+    Derived from the group NAME, never from its rank in the current month, so
+    filtering or a change in the ordering never repaints the survivors.
+    """
+    slug = (group or config.UNGROUPED).lower().replace(" & ", "-").replace(" ", "-")
+    return f"g-{slug}"
+
+
+templates.env.filters["groupclass"] = _group_class
+templates.env.filters["groupof"] = config.group_of
+templates.env.globals["GROUP_ORDER"] = config.GROUP_ORDER
+templates.env.globals["UNGROUPED"] = config.UNGROUPED
 
 app = FastAPI(title="fin-asst")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -71,16 +88,34 @@ def dashboard(request: Request, month: Optional[str] = None, months: int = 1):
     coverage.match_internal_transfers(conn)
     cov = coverage.coverage(conn)
 
+    categories = analytics.category_breakdown(conn, selected, months)
+    groups = analytics.group_breakdown(categories)
+    shown = totals[-12:]
+
+    # The month still in progress is charted, but flagged: a part-month bar
+    # beside full ones reads as a collapse in spending if nothing says otherwise.
+    this_month = date.today().strftime("%Y-%m")
+    partial = this_month if any(m["month"] == this_month for m in shown) else None
+
     return templates.TemplateResponse(request, "dashboard.html", {
         "page": "dashboard",
         "coverage": cov,
+        "cov_bars": charts.hbars(cov.destinations, label_key="destination",
+                                 value_key="amount", group_key=None),
         "income_warning": coverage.income_regime_warning(conn),
         "has_data": bool(totals),
         "months_available": available,
         "selected_month": selected,
         "window": months,
-        "totals": totals[-12:],
-        "categories": analytics.category_breakdown(conn, selected, months),
+        "totals": shown,
+        "chart": charts.flow_chart(shown, current_month=partial),
+        "partial_month": partial,
+        "categories": categories,
+        "cat_bars": charts.hbars(categories),
+        "groups": groups,
+        "top_group": groups[0] if groups else {"name": config.UNGROUPED, "spend": 0.0, "share": 0.0},
+        "month_spend": round(sum(c["spend"] for c in categories), 2),
+        "tx_count": sum(c["count"] for c in categories),
         "merchants": analytics.top_merchants(conn, selected, months, limit=10),
         "recurring": analytics.recurring_charges(conn)[:12],
         "surplus": surplus,

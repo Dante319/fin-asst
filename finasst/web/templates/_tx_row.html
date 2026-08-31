@@ -1,14 +1,14 @@
 <tr id="tx-{{ tx.id }}" class="{{ 'flash' if learned is defined }}">
   <td class="date">{{ tx.date }}</td>
   <td>
-    {{ tx.description }}
-    {% if learned %}<span class="learned">learned: "{{ learned }}"</span>{% endif %}
+    <span class="gdot {{ tx.category | groupof | groupclass }}"></span>{{ tx.description }}
+    {% if learned %}<span class="learned">learned &ldquo;{{ learned }}&rdquo;</span>{% endif %}
   </td>
-  <td class="muted">{{ tx.account_name }}</td>
+  <td class="muted small">{{ tx.account_name }}</td>
   <td class="num {{ 'inflow' if tx.amount > 0 }}">{{ tx.amount | money2 }}</td>
   <td>
-    <select class="cat-select" data-tx="{{ tx.id }}">
-      <option value="" {{ 'selected' if not tx.category }}>-- uncategorised --</option>
+    <select class="cat-select" data-tx="{{ tx.id }}" aria-label="Category for {{ tx.description }}">
+      <option value="" {{ 'selected' if not tx.category }}>&mdash; uncategorised &mdash;</option>
       {% for c in categories %}
         <option value="{{ c }}" {{ 'selected' if c == tx.category }}>{{ c }}</option>
       {% endfor %}

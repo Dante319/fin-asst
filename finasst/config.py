@@ -73,6 +73,57 @@ CATEGORIES = [
 NON_SPEND_CATEGORIES = {"Income", "Transfer", "Savings & Investments"}
 
 
+# ---------------------------------------------------------------------------
+# Category groups
+# ---------------------------------------------------------------------------
+# Twenty categories is the right granularity for a transaction, and far too many
+# for a chart: a categorical palette runs out of hues that stay distinguishable
+# (to colour-blind readers especially) at about four when any two can end up side
+# by side. So spending categories roll up into four groups, and colour encodes
+# the GROUP while the category name is always written out beside the bar. The
+# four hues were chosen by running the palette validator over every subset of the
+# reference palette and keeping only sets that pass on all pairs in both light
+# and dark; these four were the largest that did.
+#
+# "Uncategorised" is deliberately not a group. It renders neutral grey, because
+# the honest thing for money we cannot classify is to look unclassified.
+
+CATEGORY_GROUPS: dict[str, str] = {
+    # Essentials -- the bills that arrive whether or not you do anything.
+    "Housing": "Essentials",
+    "Utilities": "Essentials",
+    "Phone & Internet": "Essentials",
+    "Insurance": "Essentials",
+    "Transport": "Essentials",
+    "Health": "Essentials",
+    # Food -- split out from Essentials because it is the biggest controllable
+    # line in most months, and burying it in "Essentials" hides that.
+    "Groceries": "Food & drink",
+    "Eats & Drinks": "Food & drink",
+    # Lifestyle -- discretionary. The part a budget can actually move.
+    "Shopping": "Lifestyle",
+    "Subscriptions": "Lifestyle",
+    "Entertainment": "Lifestyle",
+    "Travel": "Lifestyle",
+    "Personal Care": "Lifestyle",
+    # Commitments -- money out that is neither a bill nor a choice this month.
+    "Remittance": "Commitments",
+    "Debt Payment": "Commitments",
+    "Fees & Interest": "Commitments",
+    "Other": "Commitments",
+}
+
+# Fixed order. Colour follows the group, never its rank in a given month, so a
+# filter that drops a group never repaints the others.
+GROUP_ORDER = ["Essentials", "Food & drink", "Lifestyle", "Commitments"]
+UNGROUPED = "Uncategorised"
+
+
+def group_of(category: str | None) -> str:
+    """Which spend group a category rolls up into."""
+    return CATEGORY_GROUPS.get(category or "", UNGROUPED)
+
+
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)

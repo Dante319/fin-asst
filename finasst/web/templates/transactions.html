@@ -1,23 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="panel">
-  <div class="panel-head">
-    <h2>Transactions</h2>
-    <label class="teach-toggle">
-      <input type="checkbox" id="teach" checked>
-      Learn the merchant when I change a category
-    </label>
-  </div>
 
+<div class="page-head">
+  <div>
+    <h1>Every <span class="accent">transaction</span></h1>
+    <p>Change a category and the app learns the merchant, so the same charge is
+       right from then on. Corrections always outrank rules.</p>
+  </div>
+  <label class="teach-toggle">
+    <input type="checkbox" id="teach" checked>
+    Learn the merchant when I change a category
+  </label>
+</div>
+
+<section class="panel">
   <form method="get" class="filters">
-    <input type="search" name="q" value="{{ q }}" placeholder="Search merchant">
-    <select name="category">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search merchant" aria-label="Search merchant">
+    <select name="category" aria-label="Category">
       <option value="">All categories</option>
       {% for c in categories %}
         <option value="{{ c }}" {{ 'selected' if c == category }}>{{ c }}</option>
       {% endfor %}
     </select>
-    <select name="month">
+    <select name="month" aria-label="Month">
       <option value="">All months</option>
       {% for m in months_available %}
         <option value="{{ m }}" {{ 'selected' if m == month }}>{{ m }}</option>
@@ -26,17 +31,23 @@
     <label><input type="checkbox" name="only_uncategorised" value="true"
                   {{ 'checked' if only_uncategorised }}> Uncategorised only</label>
     <button type="submit">Filter</button>
+    {% if q or category or month or only_uncategorised %}
+      <a class="reset" href="/transactions">clear</a>
+    {% endif %}
   </form>
 
-  <table id="tx-table">
-    <thead><tr><th>Date</th><th>Merchant</th><th>Account</th><th class="num">Amount</th><th>Category</th></tr></thead>
-    <tbody>
-      {% for tx in rows %}
-        {% include "_tx_row.html" %}
-      {% else %}
-        <tr><td colspan="5" class="muted">Nothing matches those filters.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="table-scroll">
+    <table id="tx-table">
+      <thead><tr><th>Date</th><th>Merchant</th><th>Account</th>
+                 <th class="num">Amount</th><th>Category</th></tr></thead>
+      <tbody>
+        {% for tx in rows %}
+          {% include "_tx_row.html" %}
+        {% else %}
+          <tr><td colspan="5" class="muted">Nothing matches those filters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
 {% endblock %}

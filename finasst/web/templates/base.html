@@ -4,11 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}fin-asst{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    /* Read the saved theme before first paint so a dark-mode reload never
+       flashes white. Wrapped because localStorage throws in some privacy
+       modes, and a theme preference is not worth a broken page. */
+    try {
+      var t = localStorage.getItem('finasst-theme');
+      if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/">fin&#8209;asst</a>
+  <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>fin&#8209;asst</a>
   <nav>
     <a href="/" class="{{ 'active' if page == 'dashboard' }}">Dashboard</a>
     <a href="/transactions" class="{{ 'active' if page == 'transactions' }}">Transactions</a>
@@ -16,7 +26,12 @@
     <a href="/goals" class="{{ 'active' if page == 'goals' }}">Goals</a>
     <a href="/import" class="{{ 'active' if page == 'import' }}">Import</a>
   </nav>
-  <span class="local-note" title="This server binds to 127.0.0.1 and talks to nothing else.">local only</span>
+  <div class="topbar-end">
+    <span class="local-note" title="This server binds to 127.0.0.1 and talks to nothing else.">local only</span>
+    <button class="theme-toggle" type="button" aria-label="Switch between light and dark">
+      <span class="sun" aria-hidden="true">&#9728;</span><span class="moon" aria-hidden="true">&#9789;</span>
+    </button>
+  </div>
 </header>
 <main>
 {% block content %}{% endblock %}

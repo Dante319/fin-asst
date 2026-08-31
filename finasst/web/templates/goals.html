@@ -1,14 +1,24 @@
 {% extends "base.html" %}
 {% block content %}
 
+<div class="page-head">
+  <div>
+    <h1>Goals, <span class="accent">competing</span> for one surplus</h1>
+    <p>Every goal draws on the same monthly surplus, funded in priority order.
+       A goal is only &ldquo;on track&rdquo; once the goals above it have taken their share.</p>
+  </div>
+</div>
+
 <section class="stat-row">
-  <div class="stat">
+  <div class="stat t3 rise">
+    <span class="stat-icon" aria-hidden="true">&#128176;</span>
     <span class="stat-label">Surplus being allocated</span>
     <span class="stat-value {{ 'negative' if surplus < 0 }}">{{ surplus | money }}<em>/mo</em></span>
     <span class="stat-sub">{{ surplus_basis }}</span>
   </div>
   {% if projection %}
-  <div class="stat">
+  <div class="stat t2 rise">
+    <span class="stat-icon" aria-hidden="true">&#127919;</span>
     <span class="stat-label">Your dated goals ask for</span>
     <span class="stat-value {{ 'negative' if projection.total_committed_monthly > surplus }}">
       {{ projection.total_committed_monthly | money }}<em>/mo</em></span>
@@ -18,7 +28,8 @@
       {% else %}within the surplus{% endif %}
     </span>
   </div>
-  <div class="stat">
+  <div class="stat t1 rise">
+    <span class="stat-icon" aria-hidden="true">&#128337;</span>
     <span class="stat-label">On track</span>
     {% set dated = projection.goals | selectattr('target_date') | list %}
     <span class="stat-value">{{ dated | selectattr('on_track') | list | length }}
@@ -28,81 +39,85 @@
   {% endif %}
 </section>
 
-{% if surplus_warning %}<p class="warning">{{ surplus_warning }}</p>{% endif %}
+{% if surplus_warning %}
+  <p class="notice warn"><span class="ico">&#9888;</span><span>{{ surplus_warning }}</span></p>
+{% endif %}
 {% for w in (projection.warnings if projection else []) %}
-  <p class="warning">{{ w }}</p>
+  <p class="notice warn"><span class="ico">&#9888;</span><span>{{ w }}</span></p>
 {% endfor %}
 
 {% if projection %}
-<section class="panel">
+<section class="panel accent-cool">
   <div class="panel-head">
     <h2>Projection</h2>
     <form method="get" class="inline-form">
       <label>Try a different surplus
-        <input type="number" name="surplus" step="50" value="{{ surplus | round(0) }}">
+        <input type="number" name="surplus" step="50" value="{{ surplus | round(0) | int }}" style="width:120px">
       </label>
       <button type="submit">Re-run</button>
       {% if surplus_basis == 'you set it on this page' %}<a class="reset" href="/goals">reset</a>{% endif %}
     </form>
   </div>
   <p class="caption">
-    All goals draw on the same monthly surplus, funded in priority order. That is
-    the point: a goal is only "on track" once the goals above it have taken their
-    share. Targets are inflated to the year they are reached, so the amount shown
-    is what it will actually cost then, not today.
+    Targets are inflated to the year they are reached, so the amount shown is what
+    it will actually cost then, not what it costs today.
   </p>
 
-  <table class="goals-table">
-    <thead>
-      <tr><th>Goal</th><th class="num">Target</th><th>Wanted by</th><th>Projected</th>
-          <th>Progress</th><th class="num">Needs/mo</th><th>Verdict</th></tr>
-    </thead>
-    <tbody>
-    {% for g in projection.goals %}
-      {% set gsrc = goals | selectattr('name', 'equalto', g.name) | first %}
-      <tr>
-        <td>
-          <strong>{{ g.name }}</strong>
-          {% if gsrc %}<span class="muted"> · priority {{ gsrc.priority }}</span>{% endif %}
-          {% if g.note %}<div class="note">{{ g.note }}</div>{% endif %}
-        </td>
-        <td class="num">{{ g.target_amount | money }}</td>
-        <td>{{ g.target_date or '—' }}</td>
-        <td>{{ g.projected_date or 'beyond horizon' }}</td>
-        <td class="progress-cell">
-          {% set pct = (100 * (gsrc.saved_so_far / g.target_amount)) if gsrc and g.target_amount else 0 %}
-          <span class="progress"><span class="progress-fill"
-                style="width: {{ [pct, 100] | min | round(1) }}%"></span></span>
-          <span class="muted small">{{ (gsrc.saved_so_far if gsrc else 0) | money }} saved</span>
-        </td>
-        <td class="num">{{ g.required_monthly | money if g.required_monthly is not none else '—' }}</td>
-        <td>
-          {% if not g.target_date %}
-            <span class="verdict neutral">no deadline</span>
-          {% elif g.on_track %}
-            <span class="verdict good">on track</span>
-          {% elif g.slip_months %}
-            <span class="verdict bad">{{ g.slip_months }} months late</span>
-            {% if g.shortfall_at_target_date %}
-              <div class="muted small">{{ g.shortfall_at_target_date | money }} short on the date</div>
+  <div class="table-scroll">
+    <table class="goals-table">
+      <thead>
+        <tr><th>Goal</th><th class="num">Target</th><th>Wanted by</th><th>Projected</th>
+            <th>Progress</th><th class="num">Needs/mo</th><th>Verdict</th></tr>
+      </thead>
+      <tbody>
+      {% for g in projection.goals %}
+        {% set gsrc = goals | selectattr('name', 'equalto', g.name) | first %}
+        <tr>
+          <td>
+            <strong>{{ g.name }}</strong>
+            {% if gsrc %}<span class="muted small"> &middot; priority {{ gsrc.priority }}</span>{% endif %}
+            {% if g.note %}<div class="note">{{ g.note }}</div>{% endif %}
+          </td>
+          <td class="num">{{ g.target_amount | money }}</td>
+          <td class="date">{{ g.target_date or '—' }}</td>
+          <td class="date">{{ g.projected_date or 'beyond horizon' }}</td>
+          <td class="progress-cell">
+            {% set pct = (100 * (gsrc.saved_so_far / g.target_amount)) if gsrc and g.target_amount else 0 %}
+            <span class="progress"><span class="progress-fill"
+                  style="width: {{ [pct, 100] | min | round(1) }}%"></span></span>
+            <span class="muted small">{{ (gsrc.saved_so_far if gsrc else 0) | money }} saved</span>
+          </td>
+          <td class="num">{{ g.required_monthly | money if g.required_monthly is not none else '—' }}</td>
+          <td>
+            {% if not g.target_date %}
+              <span class="verdict neutral">no deadline</span>
+            {% elif g.on_track %}
+              <span class="verdict good">&#10003; on track</span>
+            {% elif g.slip_months %}
+              <span class="verdict bad">&#9888; {{ g.slip_months }} months late</span>
+              {% if g.shortfall_at_target_date %}
+                <div class="muted small">{{ g.shortfall_at_target_date | money }} short on the date</div>
+              {% endif %}
+            {% else %}
+              <span class="verdict bad">&#9888; not reachable</span>
             {% endif %}
-          {% else %}
-            <span class="verdict bad">not reachable</span>
-          {% endif %}
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
 
-<section class="panel">
+<section class="panel accent-warm">
   <h2>What does one goal cost the others?</h2>
+  <p class="caption">Drop a goal and every other completion date moves. That movement
+     is the real price of keeping it.</p>
   <form method="get" class="inline-form">
-    <input type="hidden" name="surplus" value="{{ surplus | round(0) }}">
+    <input type="hidden" name="surplus" value="{{ surplus | round(0) | int }}">
     <label>Drop this goal
       <select name="without" onchange="this.form.submit()">
-        <option value="">— pick one —</option>
+        <option value="">&mdash; pick one &mdash;</option>
         {% for g in goals %}
           <option value="{{ g.name }}" {{ 'selected' if g.name == without }}>{{ g.name }}</option>
         {% endfor %}
@@ -111,30 +126,32 @@
   </form>
 
   {% if comparison %}
-    <table class="tight">
-      <thead><tr><th>Goal</th><th>Now</th><th>Without "{{ without }}"</th><th>Change</th></tr></thead>
-      <tbody>
-      {% for d in comparison.deltas %}
-        <tr>
-          <td>{{ d.goal }}</td>
-          <td>{{ d.baseline_date or '—' }}</td>
-          <td>{{ d.variant_date or '—' }}</td>
-          <td>
-            {% if d.months_earlier is none %}—
-            {% elif d.months_earlier > 0 %}<span class="verdict good">{{ d.months_earlier }} months earlier</span>
-            {% elif d.months_earlier < 0 %}<span class="verdict bad">{{ -d.months_earlier }} months later</span>
-            {% else %}no change{% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table class="tight">
+        <thead><tr><th>Goal</th><th>Now</th><th>Without &ldquo;{{ without }}&rdquo;</th><th>Change</th></tr></thead>
+        <tbody>
+        {% for d in comparison.deltas %}
+          <tr>
+            <td>{{ d.goal }}</td>
+            <td class="date">{{ d.baseline_date or '—' }}</td>
+            <td class="date">{{ d.variant_date or '—' }}</td>
+            <td>
+              {% if d.months_earlier is none %}—
+              {% elif d.months_earlier > 0 %}<span class="verdict good">{{ d.months_earlier }} months earlier</span>
+              {% elif d.months_earlier < 0 %}<span class="verdict bad">{{ -d.months_earlier }} months later</span>
+              {% else %}<span class="verdict neutral">no change</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% endif %}
 </section>
 {% endif %}
 
 <div class="two-col">
-<section class="panel">
+<section class="panel plain">
   <h2>{{ 'Add a goal' if goals else 'Add your first goal' }}</h2>
   <form method="post" action="/goals" class="stacked-form">
     <label>Name <input type="text" name="name" required placeholder="Chennai house"></label>
@@ -154,8 +171,8 @@
       <tbody>
       {% for g in goals %}
         <tr>
-          <td>{{ g.name }}</td>
-          <td class="muted">priority {{ g.priority }}</td>
+          <td><strong>{{ g.name }}</strong></td>
+          <td class="muted small">priority {{ g.priority }}</td>
           <td class="num">{{ g.target_amount | money }}</td>
           <td>
             <form method="post" action="/goals/{{ g.id }}/delete" class="inline-form">
@@ -169,18 +186,18 @@
   {% endif %}
 </section>
 
-<section class="panel">
+<section class="panel plain">
   <h2>Assumptions</h2>
   <p class="caption">
     These are levers, not forecasts. Set the return to 0 to see the projection
-    with no growth at all -- worth doing once, to know the floor.
+    with no growth at all &mdash; worth doing once, to know the floor.
   </p>
   <form method="post" action="/settings" class="stacked-form">
     <label>Annual return on savings
       <input type="number" name="annual_return_rate" step="0.005" value="{{ settings.annual_return_rate }}"></label>
     <label>Annual inflation on targets
       <input type="number" name="annual_inflation" step="0.005" value="{{ settings.annual_inflation }}"></label>
-    <label>Months of history defining "normal" surplus
+    <label>Months of history defining &ldquo;normal&rdquo; surplus
       <input type="number" name="surplus_lookback_months" value="{{ settings.lookback }}"></label>
     <label>Override the surplus
       <input type="text" name="manual_monthly_surplus" value="{{ settings.manual_surplus }}"

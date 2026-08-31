@@ -1,19 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
 
+<div class="page-head">
+  <div>
+    <h1>Money sent <span class="accent">abroad</span></h1>
+    <p>A statement records only what left. What arrived has to come from you &mdash;
+       and without it the real cost is unknowable, because a transfer advertising
+       &ldquo;no fee&rdquo; still takes its margin in the exchange rate.</p>
+  </div>
+</div>
+
 <section class="stat-row">
-  <div class="stat">
+  <div class="stat t2 rise">
+    <span class="stat-icon" aria-hidden="true">&#128184;</span>
     <span class="stat-label">Sent</span>
     <span class="stat-value">{{ report.total_sent | money }}</span>
     <span class="stat-sub">{{ report.transfers | length }} transfers</span>
   </div>
   {% if report.priced %}
-  <div class="stat">
+  <div class="stat t1 rise">
+    <span class="stat-icon" aria-hidden="true">&#128176;</span>
     <span class="stat-label">Blended rate</span>
     <span class="stat-value">{{ '%.2f' | format(report.blended_rate) }}<em> {{ report.priced[0].currency }}/CAD</em></span>
     <span class="stat-sub">weighted by amount sent</span>
   </div>
-  <div class="stat">
+  <div class="stat t3 rise">
+    <span class="stat-icon" aria-hidden="true">&#9878;</span>
     <span class="stat-label">Cost of the spread</span>
     <span class="stat-value {{ 'negative' if report.total_cost }}">
       {{ report.total_cost | money if report.total_cost is not none else '—' }}</span>
@@ -24,59 +36,57 @@
   {% endif %}
 </section>
 
-<section class="panel">
+<section class="panel accent-warm">
   <div class="panel-head">
     <h2>Transfers</h2>
     <form method="post" action="/remittances/rates/fetch" class="inline-form">
-      <button type="submit">Fetch reference rates</button>
+      <button type="submit" class="ghost">Fetch reference rates</button>
     </form>
   </div>
   <p class="caption">
-    A statement records only the money that left. What actually arrived has to
-    come from you — the provider's confirmation — and without it the real cost
-    is unknowable, because a transfer advertising "no fee" still takes its
-    margin in the exchange rate. Fetching reference rates is the one thing in
-    this app that touches the network, and only when you press that button.
+    Fetching reference rates is the one thing in this app that touches the network,
+    and only when you press that button. {{ report.coverage_note() }}
   </p>
-  <p class="caption">{{ report.coverage_note() }}</p>
 
-  <table>
-    <thead>
-      <tr><th>Date</th><th class="num">Sent</th><th>Received</th><th class="num">Rate</th>
-          <th class="num">vs mid-market</th><th class="num">Cost</th></tr>
-    </thead>
-    <tbody>
-    {% for t in report.transfers %}
-      <tr>
-        <td class="date">{{ t.date }}</td>
-        <td class="num">{{ t.sent | money2 }}</td>
-        <td>
-          {% if t.received %}
-            {{ '{:,.0f}'.format(t.received) }} {{ t.currency }}
-            {% if t.provider %}<span class="muted small">{{ t.provider }}</span>{% endif %}
-          {% else %}
-            <form method="post" action="/remittances/{{ t.tx_id }}" class="inline-form">
-              <input type="number" step="0.01" name="received" placeholder="INR received" required style="width:130px">
-              <input type="text" name="provider" placeholder="provider" style="width:100px">
-              <button type="submit">Save</button>
-            </form>
-          {% endif %}
-        </td>
-        <td class="num">{{ '%.2f' | format(t.effective_rate) if t.effective_rate else '—' }}</td>
-        <td class="num">
-          {% if t.spread_pct is not none %}
-            <span class="verdict {{ 'bad' if t.spread_pct > 1 else 'good' }}">
-              {{ '%+.1f' | format(t.spread_pct) }}%</span>
-          {% else %}—{% endif %}
-        </td>
-        <td class="num">{{ t.cost_cad | money2 if t.cost_cad is not none else '—' }}</td>
-      </tr>
-    {% else %}
-      <tr><td colspan="6" class="muted">
-        No remittances yet. Categorise a transaction as Remittance and it appears here.
-      </td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>Date</th><th class="num">Sent</th><th>Received</th><th class="num">Rate</th>
+            <th class="num">vs mid-market</th><th class="num">Cost</th></tr>
+      </thead>
+      <tbody>
+      {% for t in report.transfers %}
+        <tr>
+          <td class="date">{{ t.date }}</td>
+          <td class="num">{{ t.sent | money2 }}</td>
+          <td>
+            {% if t.received %}
+              {{ '{:,.0f}'.format(t.received) }} {{ t.currency }}
+              {% if t.provider %}<span class="muted small">{{ t.provider }}</span>{% endif %}
+            {% else %}
+              <form method="post" action="/remittances/{{ t.tx_id }}" class="inline-form">
+                <input type="number" step="0.01" name="received" placeholder="INR received" required style="width:130px">
+                <input type="text" name="provider" placeholder="provider" style="width:110px">
+                <button type="submit" class="ghost">Save</button>
+              </form>
+            {% endif %}
+          </td>
+          <td class="num">{{ '%.2f' | format(t.effective_rate) if t.effective_rate else '—' }}</td>
+          <td class="num">
+            {% if t.spread_pct is not none %}
+              <span class="verdict {{ 'bad' if t.spread_pct > 1 else 'good' }}">
+                {{ '%+.1f' | format(t.spread_pct) }}%</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">{{ t.cost_cad | money2 if t.cost_cad is not none else '—' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="muted">
+          No remittances yet. Categorise a transaction as Remittance and it appears here.
+        </td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
 {% endblock %}

@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import date
 from typing import Optional
 
-from .config import NON_SPEND_CATEGORIES
+from .config import NON_SPEND_CATEGORIES, group_of
 
 
 def month_key(d: str) -> str:
@@ -102,7 +102,8 @@ def category_breakdown(
     ).fetchall()
 
     result = [
-        {"category": r["cat"], "spend": round(float(r["spend"]), 2), "count": r["n"]}
+        {"category": r["cat"], "spend": round(float(r["spend"]), 2), "count": r["n"],
+         "group": group_of(r["cat"])}
         for r in rows
         if r["cat"] not in NON_SPEND_CATEGORIES
     ]
@@ -110,6 +111,28 @@ def category_breakdown(
     for r in result:
         r["share"] = round(100 * r["spend"] / total, 1)
     return result
+
+
+def group_breakdown(categories: list[dict]) -> list[dict]:
+    """Roll a category breakdown up into the four spend groups.
+
+    Takes the already-computed category rows rather than re-querying, so the
+    group totals can never disagree with the category totals they summarise.
+    """
+    totals: dict[str, dict] = {}
+    for row in categories:
+        bucket = totals.setdefault(
+            row["group"], {"name": row["group"], "spend": 0.0, "count": 0, "categories": []}
+        )
+        bucket["spend"] += row["spend"]
+        bucket["count"] += row["count"]
+        bucket["categories"].append(row["category"])
+    grand = sum(b["spend"] for b in totals.values()) or 1.0
+    out = sorted(totals.values(), key=lambda b: b["spend"], reverse=True)
+    for b in out:
+        b["spend"] = round(b["spend"], 2)
+        b["share"] = round(100 * b["spend"] / grand, 1)
+    return out
 
 
 def top_merchants(
@@ -132,7 +155,8 @@ def top_merchants(
     ).fetchall()
     return [
         {"merchant": r["description"], "category": r["cat"],
-         "spend": round(float(r["spend"]), 2), "count": r["n"]}
+         "spend": round(float(r["spend"]), 2), "count": r["n"],
+         "group": group_of(r["cat"])}
         for r in rows
     ]
 
@@ -200,6 +224,7 @@ def recurring_charges(conn: sqlite3.Connection, min_months: int = 3) -> list[dic
     ).fetchall()
     return [
         {"merchant": r["description"], "months": r["months"],
-         "avg_amount": round(float(r["avg_amount"]), 2), "category": r["cat"]}
+         "avg_amount": round(float(r["avg_amount"]), 2), "category": r["cat"],
+         "group": group_of(r["cat"])}
         for r in rows
     ]

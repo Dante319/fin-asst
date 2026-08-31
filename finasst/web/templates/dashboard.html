@@ -3,25 +3,45 @@
 
 {% if not has_data %}
   <section class="empty">
+    <div class="big">&#128202;</div>
     <h1>Nothing imported yet</h1>
-    <p>Export a CSV from Amex or Simplii and drop it into <a href="/import">Import</a>.
-       Or generate a synthetic statement to try things out:</p>
+    <p>Export a statement from Amex, Simplii or EQ Bank &mdash; CSV, Excel or PDF &mdash;
+       and drop it into <a href="/import">Import</a>. Or generate a synthetic one to
+       try things out first:</p>
     <pre>python scripts/gen_synthetic.py</pre>
   </section>
 {% else %}
 
+<div class="page-head">
+  <div>
+    <h1>Where the money <span class="accent">actually went</span></h1>
+    <p>{{ months_available | length }} months imported, {{ months_available[-1] }} to {{ months_available[0] }}.</p>
+  </div>
+</div>
+
 <section class="stat-row">
-  <div class="stat">
+  <div class="stat t3 rise"><span class="stat-icon" aria-hidden="true">&#128176;</span>
     <span class="stat-label">Monthly surplus</span>
-    <span class="stat-value {{ 'negative' if surplus < 0 }}">{{ surplus | money }}</span>
+    <span class="stat-value {{ 'negative' if surplus < 0 }}"
+          data-count="{{ surplus | round(0, 'floor') }}" data-prefix="{{ '-$' if surplus < 0 else '$' }}"
+      >{{ surplus | money }}</span>
     <span class="stat-sub">{{ surplus_basis }}</span>
   </div>
-  <div class="stat">
+  <div class="stat t2 rise"><span class="stat-icon" aria-hidden="true">&#128179;</span>
     <span class="stat-label">Spend, {{ selected_month }}</span>
-    <span class="stat-value">{{ (categories | sum(attribute='spend')) | money }}</span>
-    <span class="stat-sub">{{ categories | length }} categories</span>
+    <span class="stat-value" data-count="{{ month_spend | round(0, 'floor') }}" data-prefix="$"
+      >{{ month_spend | money }}</span>
+    <span class="stat-sub">{{ categories | length }} categories, {{ tx_count }} transactions</span>
   </div>
-  <div class="stat">
+  <div class="stat t1 rise"><span class="stat-icon" aria-hidden="true">&#128200;</span>
+    <span class="stat-label">Biggest group</span>
+    <span class="stat-value">{{ top_group.share | round(0) | int }}<em>%</em></span>
+    <span class="stat-sub">
+      <span class="gdot {{ top_group.name | groupclass }}"></span>{{ top_group.name }}
+      &middot; {{ top_group.spend | money }}
+    </span>
+  </div>
+  <div class="stat t4 rise"><span class="stat-icon" aria-hidden="true">&#128269;</span>
     <span class="stat-label">Needs a look</span>
     <span class="stat-value">{{ uncategorised_count }}</span>
     <span class="stat-sub">
@@ -32,26 +52,30 @@
   </div>
 </section>
 
-{% if surplus_warning %}<p class="warning">{{ surplus_warning }}</p>{% endif %}
-{% if income_warning %}<p class="warning"><strong>Income changed.</strong> {{ income_warning }}</p>{% endif %}
+{% if surplus_warning %}
+  <p class="notice warn"><span class="ico">&#9888;</span><span>{{ surplus_warning }}</span></p>
+{% endif %}
+{% if income_warning %}
+  <p class="notice bad"><span class="ico">&#9888;</span>
+     <span><strong>Income changed.</strong> {{ income_warning }}</span></p>
+{% endif %}
 
 {% if coverage.unmatched_outflow > 0.01 %}
-<section class="panel coverage">
+<section class="panel coverage accent-flag">
   <h2>What this app cannot see</h2>
   <p class="caption">{{ coverage.verdict() }}</p>
   <div class="hbars">
-    {% set top = coverage.destinations[0].amount %}
-    {% for d in coverage.destinations %}
+    {% for d in cov_bars %}
     <div class="hbar-row">
-      <span class="hbar-label" title="{{ d.destination }}">{{ d.destination }}</span>
+      <span class="hbar-label" title="{{ d.label }}">{{ d.label }}</span>
       <span class="hbar-track">
-        <span class="hbar-fill gap" style="width: {{ (100 * d.amount / top) | round(1) }}%"></span>
+        <span class="hbar-fill gap" style="width: {{ d.width }}%; animation-delay: {{ loop.index0 * 45 }}ms"></span>
       </span>
-      <span class="hbar-value">{{ d.amount | money }} <em>&times;{{ d.count }}</em></span>
+      <span class="hbar-value"><strong>{{ d.value | money }}</strong><em>&times;{{ d.count }}</em></span>
     </div>
     {% endfor %}
   </div>
-  <p class="caption" style="margin-top:14px">
+  <p class="caption" style="margin-top:16px; margin-bottom:0">
     Import the account on the receiving end and these stop being a gap: matched
     pairs are recognised as one internal movement instead of money leaving.
     Currently tracking {{ coverage.accounts | join(', ') }}.
@@ -59,102 +83,137 @@
 </section>
 {% endif %}
 
-<section class="panel viz-root">
+<section class="panel accent-cool">
   <h2>Income, spending and surplus by month</h2>
   <p class="caption">Transfers between your own accounts and money moved into savings are
-     excluded from both sides, so a credit-card payment never looks like income.</p>
+     excluded from both sides, so a credit-card payment never looks like income.
+     {% if partial_month %}The {{ partial_month }} bars cover a part month and will keep growing.{% endif %}</p>
 
-  {% set maxval = totals | map(attribute='income') | list %}
-  {% set peak = (totals | map(attribute='income') | max) | default(1) %}
   <div class="legend">
     <span><i class="swatch s1"></i>Income</span>
     <span><i class="swatch s2"></i>Spending</span>
     <span><i class="swatch s3"></i>Surplus</span>
   </div>
-  <div class="grouped-bars">
-    {% for m in totals %}
-    <div class="month-group">
-      <div class="bars">
-        <div class="bar s1" style="height: {{ (100 * m.income / peak) | round(1) }}%"
-             title="{{ m.month }} income {{ m.income | money2 }}"></div>
-        <div class="bar s2" style="height: {{ (100 * m.spend / peak) | round(1) }}%"
-             title="{{ m.month }} spending {{ m.spend | money2 }}"></div>
-        <div class="bar s3 {{ 'negative' if m.surplus < 0 }}"
-             style="height: {{ (100 * (m.surplus if m.surplus > 0 else -m.surplus) / peak) | round(1) }}%"
-             title="{{ m.month }} surplus {{ m.surplus | money2 }}"></div>
-      </div>
-      <span class="month-label">{{ m.month[5:] }}</span>
-    </div>
-    {% endfor %}
+
+  <div class="chart-wrap">
+    <div class="tip" role="status" aria-live="off"></div>
+    <svg class="flow-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
+         role="img"
+         aria-label="Grouped bar chart of monthly income, spending and surplus. The same figures are in the table below.">
+      {% for g in chart.gridlines %}
+        <line class="grid {{ 'zero' if g.is_zero }}" x1="{{ chart.plot_left - 6 }}" x2="{{ chart.plot_right }}" y1="{{ g.y }}" y2="{{ g.y }}"></line>
+        <text class="tick" x="{{ chart.label_x }}" y="{{ g.y + 3.5 }}" text-anchor="end">{{ g.label }}</text>
+      {% endfor %}
+
+      {% for m in chart.months %}
+      <g class="month-group" data-month="{{ m.full }}" data-partial="{{ '1' if m.partial else '0' }}" tabindex="0">
+        <rect class="band" x="{{ m.left }}" y="{{ chart.plot_top }}"
+              width="{{ m.width }}" height="{{ chart.plot_bottom - chart.plot_top }}"></rect>
+        {% for b in chart.bars if b.month == m.full %}
+          <rect class="bar {{ b.series }} {{ 'neg' if b.negative }} grow"
+                style="--origin: {{ 'top' if b.negative else 'bottom' }}; animation-delay: {{ loop.index0 * 45 + m.x | int % 7 * 10 }}ms"
+                x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"
+                data-label="{{ b.label }}" data-value="{{ b.value }}">
+            <title>{{ m.full }} {{ b.label }}: {{ b.value | money2 }}</title>
+          </rect>
+        {% endfor %}
+        <text class="mlabel {{ 'partial' if m.partial }}" x="{{ m.x }}" y="{{ chart.height - 10 }}">{{ m.label }}</text>
+      </g>
+      {% endfor %}
+    </svg>
   </div>
+
   <details class="table-view">
     <summary>Table view</summary>
-    <table>
-      <thead><tr><th>Month</th><th>Income</th><th>Spending</th><th>Saved</th><th>Surplus</th></tr></thead>
-      <tbody>
-      {% for m in totals %}
-        <tr><td>{{ m.month }}</td><td>{{ m.income | money2 }}</td><td>{{ m.spend | money2 }}</td>
-            <td>{{ m.saved | money2 }}</td>
-            <td class="{{ 'negative' if m.surplus < 0 }}">{{ m.surplus | money2 }}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Month</th><th class="num">Income</th><th class="num">Spending</th>
+                   <th class="num">Saved</th><th class="num">Surplus</th></tr></thead>
+        <tbody>
+        {% for m in totals %}
+          <tr><td class="date">{{ m.month }}{% if m.month == partial_month %}
+                <span class="muted small">part month</span>{% endif %}</td>
+              <td class="num">{{ m.income | money2 }}</td><td class="num">{{ m.spend | money2 }}</td>
+              <td class="num">{{ m.saved | money2 }}</td>
+              <td class="num {{ 'negative' if m.surplus < 0 }}">{{ m.surplus | money2 }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </details>
 </section>
 
-<section class="panel viz-root">
+<section class="panel">
   <div class="panel-head">
     <h2>Where it went</h2>
     <form method="get" action="/" class="inline-form">
-      <select name="month" onchange="this.form.submit()">
+      <select name="month" onchange="this.form.submit()" aria-label="Month">
         {% for m in months_available %}
           <option value="{{ m }}" {{ 'selected' if m == selected_month }}>{{ m }}</option>
         {% endfor %}
       </select>
-      <select name="months" onchange="this.form.submit()">
+      <select name="months" onchange="this.form.submit()" aria-label="Window">
         <option value="1" {{ 'selected' if window == 1 }}>this month</option>
         <option value="3" {{ 'selected' if window == 3 }}>3-month window</option>
         <option value="6" {{ 'selected' if window == 6 }}>6-month window</option>
       </select>
     </form>
   </div>
-  {% set top = categories[0].spend if categories else 1 %}
+  <p class="caption">Colour marks the group a category belongs to. Twenty categories is more
+     hues than anyone can tell apart, so the palette stops at four groups and the
+     category name is always written out.</p>
+
+  <div class="legend">
+    {% for g in GROUP_ORDER %}<span><i class="swatch {{ g | groupclass }}"></i>{{ g }}</span>{% endfor %}
+    <span><i class="swatch g-uncategorised"></i>{{ UNGROUPED }}</span>
+  </div>
+
   <div class="hbars">
-    {% for c in categories %}
+    {% for c in cat_bars %}
     <div class="hbar-row">
-      <span class="hbar-label">{{ c.category }}</span>
+      <span class="hbar-label"><span class="gdot {{ c.group | groupclass }}"></span>{{ c.label }}</span>
       <span class="hbar-track">
-        <span class="hbar-fill" style="width: {{ (100 * c.spend / top) | round(1) }}%"
-              title="{{ c.category }}: {{ c.spend | money2 }} over {{ c.count }} transactions"></span>
+        <span class="hbar-fill {{ c.group | groupclass }}"
+              style="width: {{ c.width }}%; animation-delay: {{ loop.index0 * 40 }}ms"
+              title="{{ c.label }}: {{ c.value | money2 }} over {{ c.count }} transactions"></span>
       </span>
-      <span class="hbar-value">{{ c.spend | money }} <em>{{ c.share }}%</em></span>
+      <span class="hbar-value"><strong>{{ c.value | money }}</strong><em>{{ c.share }}%</em></span>
     </div>
+    {% else %}
+      <p class="muted">Nothing spent in this window.</p>
     {% endfor %}
   </div>
 </section>
 
 <div class="two-col">
-  <section class="panel">
+  <section class="panel plain">
     <h2>Biggest merchants</h2>
+    <p class="caption">{{ selected_month }}{% if window > 1 %}, {{ window }}-month window{% endif %}.</p>
     <table class="tight">
       <tbody>
       {% for m in merchants %}
-        <tr><td>{{ m.merchant }}</td><td class="muted">{{ m.category }}</td>
+        <tr><td><span class="gdot {{ m.group | groupclass }}"></span>{{ m.merchant }}</td>
+            <td class="muted">{{ m.category }}</td>
             <td class="num">{{ m.spend | money }}</td><td class="muted num">&times;{{ m.count }}</td></tr>
+      {% else %}
+        <tr><td class="muted">Nothing in this window.</td></tr>
       {% endfor %}
       </tbody>
     </table>
   </section>
 
-  <section class="panel">
+  <section class="panel plain">
     <h2>Charging you most months</h2>
-    <p class="caption">Your fixed cost -- what you would still pay in a month you did nothing.</p>
+    <p class="caption">Your fixed cost &mdash; what you would still pay in a month you did nothing.</p>
     <table class="tight">
       <tbody>
       {% for r in recurring %}
-        <tr><td>{{ r.merchant }}</td><td class="muted">{{ r.category }}</td>
+        <tr><td><span class="gdot {{ r.group | groupclass }}"></span>{{ r.merchant }}</td>
+            <td class="muted">{{ r.category }}</td>
             <td class="num">{{ r.avg_amount | money }}</td>
             <td class="muted num">{{ r.months }} mo</td></tr>
+      {% else %}
+        <tr><td class="muted">Not enough history yet.</td></tr>
       {% endfor %}
       </tbody>
     </table>

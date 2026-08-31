@@ -1,74 +1,96 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="panel">
-  <h2>Import a statement</h2>
-  <p class="caption">
-    CSV, Excel (.xlsx) and PDF statements are all accepted. Amex, Simplii (CSV,
-    credit-card PDF and chequing PDF) and EQ Bank (PDF) are recognised automatically;
-    any other CSV or Excel file with a header row falls back to a column-guessing
-    parser. PDF statements are checked against their own stated balance before
-    anything is saved, and refused if the numbers do not add up. Re-importing a file
-    you have already loaded, or two exports that overlap by a few days, adds nothing
-    twice.
-  </p>
 
-  <form method="post" enctype="multipart/form-data" class="import-form">
-    <label>Statement files
-      <input type="file" name="files" accept=".csv,.xlsx,.xls,.pdf" multiple required>
-    </label>
-    <label>Account name
-      <input type="text" name="account" list="account-list" placeholder="Amex SimplyCash">
-      <datalist id="account-list">
-        {% for a in accounts %}<option value="{{ a.name }}">{% endfor %}
-      </datalist>
-    </label>
-    <label>Format
-      <select name="issuer">
-        <option value="">detect automatically</option>
-        <option value="amex">Amex</option>
-        <option value="amex-yearend">Amex (year-end summary)</option>
-        <option value="simplii">Simplii (CSV)</option>
-        <option value="simplii-cc-pdf">Simplii credit card (PDF)</option>
-        <option value="simplii-chequing-pdf">Simplii chequing (PDF)</option>
-        <option value="eqbank">EQ Bank (PDF)</option>
-        <option value="generic">generic</option>
-      </select>
-    </label>
-    <label>Account type
-      <select name="kind">
-        <option value="credit">credit card</option>
-        <option value="chequing">chequing</option>
-        <option value="savings">savings</option>
-      </select>
-    </label>
-    <button type="submit">Import</button>
-  </form>
+<div class="page-head">
+  <div>
+    <h1>Import a <span class="accent">statement</span></h1>
+    <p>Nothing leaves this machine. Files are parsed, checked against the
+       statement's own totals, and written to a database on your disk.</p>
+  </div>
+</div>
 
-  {% if results %}
-    <h3>Imported</h3>
+{% if results %}
+  <section class="panel accent-cool">
+    <h2>Imported</h2>
     <ul class="results">
       {% for r in results %}<li>{{ r.summary }}</li>{% endfor %}
     </ul>
     {% if stats %}
-      <p>{{ stats.matched }} categorised automatically, {{ stats.unmatched }}
-         <a href="/transactions?only_uncategorised=true">need a look</a>.</p>
+      <p class="caption" style="margin-bottom:0">{{ stats.matched }} categorised automatically,
+         {{ stats.unmatched }} <a href="/transactions?only_uncategorised=true">need a look</a>.</p>
     {% endif %}
-  {% endif %}
-  {% if errors %}
-    <h3>Problems</h3>
+  </section>
+{% endif %}
+{% if errors %}
+  <section class="panel accent-flag">
+    <h2>Problems</h2>
     <ul class="errors">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
-  {% endif %}
+  </section>
+{% endif %}
 
-  {% if accounts %}
-    <h3>Accounts</h3>
-    <table class="tight">
-      <tbody>
-      {% for a in accounts %}
-        <tr><td>{{ a.name }}</td><td class="muted">{{ a.issuer }} / {{ a.kind }}</td>
-            <td class="muted">{{ a.currency }}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  {% endif %}
-</section>
+<div class="two-col">
+  <section class="panel">
+    <h2>Drop a file in</h2>
+    <p class="caption">
+      CSV, Excel (.xlsx) and PDF are all accepted. Amex, Simplii (CSV, credit-card PDF
+      and chequing PDF) and EQ Bank (PDF) are recognised automatically; any other CSV
+      or Excel file with a header row falls back to a column-guessing parser. PDF
+      statements are checked against their own stated balance before anything is
+      saved, and refused if the numbers do not add up. Re-importing a file you have
+      already loaded, or two exports that overlap by a few days, adds nothing twice.
+    </p>
+
+    <form method="post" enctype="multipart/form-data" class="import-form">
+      <label>Statement files
+        <input type="file" name="files" accept=".csv,.xlsx,.xls,.pdf" multiple required>
+      </label>
+      <label>Account name
+        <input type="text" name="account" list="account-list" placeholder="Amex SimplyCash">
+        <datalist id="account-list">
+          {% for a in accounts %}<option value="{{ a.name }}">{% endfor %}
+        </datalist>
+      </label>
+      <label>Format
+        <select name="issuer">
+          <option value="">detect automatically</option>
+          <option value="amex">Amex</option>
+          <option value="amex-yearend">Amex (year-end summary)</option>
+          <option value="simplii">Simplii (CSV)</option>
+          <option value="simplii-cc-pdf">Simplii credit card (PDF)</option>
+          <option value="simplii-chequing-pdf">Simplii chequing (PDF)</option>
+          <option value="eqbank">EQ Bank (PDF)</option>
+          <option value="generic">generic</option>
+        </select>
+      </label>
+      <label>Account type
+        <select name="kind">
+          <option value="credit">credit card</option>
+          <option value="chequing">chequing</option>
+          <option value="savings">savings</option>
+        </select>
+      </label>
+      <button type="submit">Import</button>
+    </form>
+  </section>
+
+  <section class="panel plain">
+    <h2>Accounts</h2>
+    {% if accounts %}
+      <p class="caption">Coverage improves with every account you add: money moving
+         between two accounts the app knows about is matched as one movement instead
+         of counted as spending.</p>
+      <table class="tight">
+        <tbody>
+        {% for a in accounts %}
+          <tr><td><strong>{{ a.name }}</strong></td>
+              <td class="muted">{{ a.issuer }} / {{ a.kind }}</td>
+              <td class="muted num">{{ a.currency }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="caption">No accounts yet. The first import creates one.</p>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}
