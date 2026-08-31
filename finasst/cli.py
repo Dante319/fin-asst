@@ -7,6 +7,8 @@
     finasst summary [--month 2026-07] [--months 3]
     finasst income add "New job" --amount 4300 --every biweekly --from 2026-07-10
     finasst income list
+    finasst destination add "e-transfer to cibc" --label "CIBC chequing" --kind own_account
+    finasst destinations
     finasst goal add "Chennai house" --amount 250000 --date 2031-06-01 --priority 20
     finasst goals
     finasst project [--surplus 2500]
@@ -20,7 +22,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from . import analytics, config, coverage, db, income, remittance
+from . import analytics, config, coverage, db, destinations, income, remittance
 from .categorize import categorize_all, seed_rules, set_manual_category
 from .goals import Goal, add_goal, compare, load_goals, project
 from .importers import import_file
@@ -64,6 +66,14 @@ def cmd_import(args) -> int:
     stats = categorize_all(conn)
     print(f"Categorised {stats['matched']}, {stats['unmatched']} need a look "
           f"(`finasst review`).")
+    # A newly imported statement can contain both halves of an old transfer,
+    # and rows a declared destination already explains. Both have to be
+    # re-run here or the coverage figure stays stale until something else
+    # happens to call them.
+    coverage.match_internal_transfers(conn)
+    refiled = destinations.apply_all(conn)
+    if refiled:
+        print(f"{refiled} transfer(s) refiled as spending by a destination you declared.")
     return 0
 
 
@@ -129,6 +139,7 @@ def cmd_summary(args) -> int:
         print(f"  Note: {avg['warning']}")
 
     coverage.match_internal_transfers(conn)
+    destinations.apply_all(conn)
     cov = coverage.coverage(conn)
     if cov.unmatched_outflow > 0.01:
         print(f"\n  ! {cov.verdict()}")
@@ -142,6 +153,7 @@ def cmd_summary(args) -> int:
 def cmd_coverage(args) -> int:
     conn = _conn()
     match = coverage.match_internal_transfers(conn)
+    destinations.apply_all(conn)
     cov = coverage.coverage(conn, since=args.since)
     print(f"Accounts imported: {', '.join(cov.accounts) or 'none'}")
     if match.matched_pairs:
@@ -149,15 +161,88 @@ def cmd_coverage(args) -> int:
               f"({_money(match.matched_amount)}) between your own accounts.")
     print()
     print(cov.verdict())
-    if cov.destinations:
-        print("\nWhere unmatched money went:")
-        for d in cov.destinations:
+    res = destinations.resolution(conn, since=args.since)
+    if res.declared:
+        print("\nWhat you have accounted for by hand:")
+        for d in res.declared:
+            cat = f" -> {d.category}" if d.category else ""
+            print(f"  {_money(d.amount):>12}  x{d.count:<3} {d.label[:34]:<34} "
+                  f"({d.short}{cat})")
+    if res.unexplained:
+        print("\nStill unexplained -- nothing in the app says where this went:")
+        for d in res.unexplained:
             print(f"  {_money(d['amount']):>12}  x{d['count']:<3} {d['destination'][:48]}")
-        print("\nImport the account on the receiving end and these stop being a gap.")
+        print("\nEither import the account on the receiving end, or say where it goes:")
+        print('  finasst destination add "<part of the description>" '
+              '--label "CIBC chequing" --kind own_account')
+    for w in res.warnings:
+        print(f"\n! {w}")
     warning = coverage.income_regime_warning(conn)
     if warning:
         print(f"\nIncome: {warning}")
     return 0
+
+
+def cmd_destination_add(args) -> int:
+    conn = _conn()
+    account_id = None
+    if args.account:
+        row = conn.execute("SELECT id, name FROM accounts WHERE lower(name) = lower(?)",
+                           (args.account,)).fetchone()
+        if not row:
+            names = [r["name"] for r in conn.execute("SELECT name FROM accounts ORDER BY name")]
+            print(f"No account called {args.account!r}. Known: {', '.join(names) or 'none'}",
+                  file=sys.stderr)
+            return 2
+        account_id = int(row["id"])
+    try:
+        dest = destinations.Destination(
+            pattern=args.pattern, label=args.label, kind=args.kind,
+            account_id=account_id, category=args.category, notes=args.notes or "",
+        )
+        dest.id = destinations.add(conn, dest)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    moved = destinations.apply_all(conn)
+    res = destinations.resolution(conn)
+    hit = next((d for d in res.declared if d.destination_id == dest.id or d.label == dest.label), None)
+    print(f"'{args.label}' now explains "
+          f"{_money(hit.amount) if hit else '$0.00'} of outgoing money "
+          f"({destinations.KINDS[args.kind]['short']}).")
+    if moved:
+        print(f"{moved} transaction(s) refiled as {args.category} and now counted as spending.")
+    print(f"Still unexplained: {_money(res.unexplained_total)}.")
+    for w in res.warnings:
+        print(f"\n! {w}")
+    return 0
+
+
+def cmd_destinations(args) -> int:
+    conn = _conn()
+    rows = destinations.all_destinations(conn)
+    if not rows:
+        print("No destinations declared. Run `finasst coverage` to see what is unexplained.")
+        return 0
+    print(" ID  Label                     Kind          Matches on")
+    print("-" * 78)
+    for d in rows:
+        print(f"{d.id:>3}  {d.label[:24]:<24}  {d.kind:<12}  {d.pattern[:28]}"
+              + (f"  -> {d.category}" if d.category else ""))
+    res = destinations.resolution(conn)
+    print(f"\nExplained by hand: {_money(res.declared_total)}   "
+          f"Still unexplained: {_money(res.unexplained_total)}")
+    return 0
+
+
+def cmd_destination_rm(args) -> int:
+    conn = _conn()
+    if destinations.delete(conn, args.id):
+        print(f"Deleted destination {args.id}. Any transactions it had refiled are "
+              "back in the transfer bucket.")
+        return 0
+    print(f"No destination with id {args.id}.", file=sys.stderr)
+    return 1
 
 
 def cmd_fx_list(args) -> int:
@@ -508,6 +593,24 @@ def build_parser() -> argparse.ArgumentParser:
     sm.add_argument("--month")
     sm.add_argument("--months", type=int, default=1)
     sm.set_defaults(func=cmd_summary)
+
+    dst = sub.add_parser("destination", help="say where an unmatched transfer actually goes")
+    dstsub = dst.add_subparsers(dest="destination_command", required=True)
+    da = dstsub.add_parser("add", help="declare a destination for outflows matching a description")
+    da.add_argument("pattern", help="part of the transaction description, e.g. 'e-transfer to cibc'")
+    da.add_argument("--label", required=True, help="what you call this destination")
+    da.add_argument("--kind", required=True, choices=list(destinations.KINDS),
+                    help="own_account = still yours elsewhere; external = genuinely spent; "
+                         "debt = pays a balance at another institution")
+    da.add_argument("--category", help="required for --kind external: how to file the spending")
+    da.add_argument("--account", help="name of an account in this app, if it is one you do import")
+    da.add_argument("--notes")
+    da.set_defaults(func=cmd_destination_add)
+    dr = dstsub.add_parser("rm", help="delete a destination by id")
+    dr.add_argument("id", type=int)
+    dr.set_defaults(func=cmd_destination_rm)
+    sub.add_parser("destinations", help="every declared destination, and what is left over"
+                   ).set_defaults(func=cmd_destinations)
 
     inc = sub.add_parser("income", help="declare what you are paid, and when that changed")
     incsub = inc.add_subparsers(dest="income_command", required=True)

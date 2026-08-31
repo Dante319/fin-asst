@@ -558,3 +558,9 @@ tr.flash td { animation: flash 1.3s ease-out; }
   }
   .panel:hover, .stat:hover, button:hover, .topbar nav a:hover { transform: none; }
 }
+
+/* ------------------------------------------------------ destination kinds -- */
+
+.kind-help { margin: 4px 0 0; display: grid; gap: 4px 14px; max-width: 74ch; }
+.kind-help dt { font-weight: 650; font-size: 13px; color: var(--text-primary); }
+.kind-help dd { margin: 0 0 8px; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }

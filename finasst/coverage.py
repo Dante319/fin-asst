@@ -15,12 +15,19 @@ Two jobs:
 2. **Coverage.** Everything else that leaves as a transfer goes somewhere the
    app has no statements for. That total is reported next to your spending, so
    you always know how much of the picture is missing.
+
+Most of that gap is not a mystery to the person using the app -- it is the
+account at another bank they never exported. `destinations.py` is how they say
+so, and coverage reports what they declared in a SEPARATE column from what the
+matcher verified. A declaration explains an outflow; it never proves one.
 """
 from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+
+from . import destinations
 
 MATCH_WINDOW_DAYS = 4
 MATCH_TOLERANCE = 0.01
@@ -114,6 +121,13 @@ class Coverage:
     total_outflow: float = 0.0
     destinations: list[dict] = field(default_factory=list)
     accounts: list[str] = field(default_factory=list)
+    # Split of `invisible` into the part you have accounted for by hand and
+    # the part nothing in the app explains. Declared is not verified.
+    declared_still_yours: float = 0.0    # kind=own_account: moved, not spent
+    declared_debt: float = 0.0           # kind=debt: gone, settles a balance elsewhere
+    resolved_as_spending: float = 0.0    # kind=external: now counted as spending
+    unexplained: float = 0.0
+    declared: list = field(default_factory=list)
 
     @property
     def invisible(self) -> float:
@@ -132,6 +146,11 @@ class Coverage:
         """
         return (self.invisible / self.total_outflow) if self.total_outflow else 0.0
 
+    @property
+    def declared_total(self) -> float:
+        """The part of the gap you have explained, however you explained it."""
+        return round(self.declared_still_yours + self.declared_debt, 2)
+
     def verdict(self) -> str:
         if self.invisible < 0.01:
             return "Every outflow lands in an account this app can see."
@@ -145,6 +164,24 @@ class Coverage:
                 f" ${self.to_untracked_savings:,.0f} of that went to savings or "
                 "investments, so it is not lost -- just not visible here."
             )
+        # What you have said about it. Deliberately worded as your account of
+        # it, not the app's finding: nothing here was checked against a
+        # statement, and a declaration that reads like evidence is worse than
+        # no declaration at all.
+        if self.declared_still_yours > 0.01:
+            note += (
+                f" You have accounted for ${self.declared_still_yours:,.0f} of it "
+                "as money moved to your own accounts elsewhere -- still yours, "
+                "just not visible here. That is your word, not a matched statement."
+            )
+        if self.declared_debt > 0.01:
+            note += (
+                f" ${self.declared_debt:,.0f} pays balances at institutions this app "
+                "has no statements for, so the outflow is explained but the "
+                "spending behind it is not."
+            )
+        if self.unexplained > 0.01 and self.declared_total > 0.01:
+            note += f" ${self.unexplained:,.0f} is still unexplained."
         return note
 
 
@@ -173,20 +210,28 @@ def coverage(conn: sqlite3.Connection, since: str | None = None) -> Coverage:
         args,
     ).fetchall()
 
-    destinations = [
+    # Named dest_rows, not `destinations`: the module of that name is imported
+    # here, and shadowing it made every coverage call raise.
+    dest_rows = [
         {"destination": r["description"], "count": r["n"], "amount": round(r["s"], 2)}
         for r in rows if r["s"] > 0
     ]
-    unmatched = round(sum(d["amount"] for d in destinations), 2)
+    unmatched = round(sum(d["amount"] for d in dest_rows), 2)
 
     accounts = [r["name"] for r in conn.execute("SELECT name FROM accounts ORDER BY name")]
+    res = destinations.resolution(conn, since)
     return Coverage(
+        declared_still_yours=res.by_kind("own_account"),
+        declared_debt=res.by_kind("debt"),
+        resolved_as_spending=res.by_kind("external"),
+        unexplained=res.unexplained_total,
+        declared=res.declared,
         visible_spend=round(visible, 2),
         unmatched_outflow=unmatched,
         matched_internal=round(matched, 2),
         to_untracked_savings=round(savings, 2),
         total_outflow=round(all_out, 2),
-        destinations=destinations,
+        destinations=dest_rows,
         accounts=accounts,
     )
 

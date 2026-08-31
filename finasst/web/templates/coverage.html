@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>The money this app <span class="accent">cannot follow</span></h1>
+    <p>Every outflow filed as a transfer that had no matching deposit anywhere in
+       your imported accounts. Most of it is not a mystery to you &mdash; so say
+       where it goes. A declaration will never be counted as a verified match,
+       but it moves the total out of &ldquo;unknown&rdquo; and into something you
+       can reason about.</p>
+  </div>
+</div>
+
+<section class="stat-row">
+  <div class="stat t4 rise">
+    <span class="stat-icon" aria-hidden="true">&#128373;</span>
+    <span class="stat-label">Left for somewhere unseen</span>
+    <span class="stat-value">{{ coverage.invisible | money }}</span>
+    <span class="stat-sub">{{ '%.0f' | format(100 * coverage.gap_ratio) }}% of all money out</span>
+  </div>
+  <div class="stat t1 rise">
+    <span class="stat-icon" aria-hidden="true">&#9997;</span>
+    <span class="stat-label">You have accounted for</span>
+    <span class="stat-value">{{ coverage.declared_total | money }}</span>
+    <span class="stat-sub">of the gap, on your word rather than a matched statement{%
+      if coverage.resolved_as_spending > 0.01 %}; a further
+      {{ coverage.resolved_as_spending | money }} you declared as money that genuinely
+      left has been refiled as spending and is no longer part of the gap{% endif %}</span>
+  </div>
+  <div class="stat t2 rise">
+    <span class="stat-icon" aria-hidden="true">&#10067;</span>
+    <span class="stat-label">Still unexplained</span>
+    <span class="stat-value {{ 'negative' if resolution.unexplained_total > 0.01 }}">
+      {{ resolution.unexplained_total | money }}</span>
+    <span class="stat-sub">{{ resolution.unexplained | length }} description{{ '' if resolution.unexplained | length == 1 else 's' }}</span>
+  </div>
+</section>
+
+<p class="notice info"><span class="ico">&#8505;</span><span>{{ coverage.verdict() }}</span></p>
+{% for w in resolution.warnings %}
+  <p class="notice warn"><span class="ico">&#9888;</span><span>{{ w }}</span></p>
+{% endfor %}
+
+{% if resolution.unexplained %}
+<section class="panel accent-flag">
+  <div class="panel-head"><h2>Still unexplained</h2></div>
+  <p class="caption">
+    Pick one, say where it goes, and the form below is pre-filled with its
+    description. Matching is on the text, so one declaration covers every past
+    and future transfer that looks like it.
+  </p>
+  <div class="table-scroll">
+    <table class="goals-table">
+      <thead><tr><th>Description</th><th class="num">Times</th><th class="num">Total</th><th></th></tr></thead>
+      <tbody>
+      {% for d in resolution.unexplained %}
+        <tr>
+          <td><strong>{{ d.destination }}</strong></td>
+          <td class="num">{{ d.count }}</td>
+          <td class="num">{{ d.amount | money }}</td>
+          <td><button type="button" class="link-button declare-btn"
+                      data-pattern="{{ d.destination }}">say where this goes</button></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if resolution.declared %}
+<section class="panel accent-cool">
+  <div class="panel-head"><h2>What you have accounted for</h2></div>
+  <p class="caption">
+    None of this has been checked against a statement &mdash; it is what you told
+    the app. Import the account on the receiving end and the same money becomes a
+    verified pair instead.
+    {% if coverage.resolved_as_spending > 0.01 %}
+    Rows marked <em>money that genuinely left</em> have already been refiled as
+    spending, so they no longer count towards the gap above &mdash; which is why
+    the totals in this table add up to more than it.{% endif %}
+  </p>
+  <div class="table-scroll">
+    <table class="goals-table">
+      <thead><tr><th>Destination</th><th>What it means</th><th class="num">Times</th>
+                 <th class="num">Total</th><th></th></tr></thead>
+      <tbody>
+      {% for d in resolution.declared %}
+        <tr>
+          <td><strong>{{ d.label }}</strong>
+            {% if d.tracked_account %}<div class="note">names {{ d.tracked_account }},
+              which this app does import &mdash; see the warning above</div>{% endif %}</td>
+          <td>{{ kinds[d.kind].label }}
+            {% if d.category %}<span class="muted small"> &middot; filed as {{ d.category }},
+              out of the gap</span>{% endif %}</td>
+          <td class="num">{{ d.count }}</td>
+          <td class="num">{{ d.amount | money }}</td>
+          <td>
+            {% for decl in declarations %}{% if decl.id == d.destination_id %}
+            <form method="post" action="/coverage/destinations/{{ decl.id }}/delete" class="inline-form">
+              <button class="link-button" type="submit">remove</button>
+            </form>
+            {% endif %}{% endfor %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel accent-warm">
+  <div class="panel-head"><h2>Say where money goes</h2></div>
+  <form method="post" action="/coverage/destinations" class="stacked-form" id="declare-form">
+    <label>Match transfers whose description contains
+      <input type="text" name="pattern" id="declare-pattern" required
+             placeholder="e-transfer to cibc">
+      <span class="hint">a distinctive fragment, not the whole line</span>
+    </label>
+    <label>What you call this destination
+      <input type="text" name="label" required placeholder="CIBC chequing">
+    </label>
+    <label>What it means for the money
+      <select name="kind" id="declare-kind">
+        {% for key, k in kinds.items() %}
+          <option value="{{ key }}">{{ k.label }} &mdash; {{ k.short }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>File it as (only for money that genuinely left)
+      <select name="category">
+        <option value="">&mdash;</option>
+        {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+      </select>
+      <span class="hint">money you send away is spending; without a category it
+        would stay hidden in the transfer bucket</span>
+    </label>
+    <label>Is it an account you already import?
+      <select name="account_id">
+        <option value="">no</option>
+        {% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+      </select>
+      <span class="hint">saying yes raises a warning rather than hiding the gap
+        &mdash; if the app has that account, the pairing should have worked</span>
+    </label>
+    <button type="submit">Save destination</button>
+  </form>
+  <dl class="kind-help">
+    {% for key, k in kinds.items() %}
+      <dt>{{ k.label }}</dt><dd>{{ k.help }}</dd>
+    {% endfor %}
+  </dl>
+</section>
+
+<script>
+  /* Pre-fill the form from a row rather than making you retype a bank's
+     description, which is exactly the kind of transcription people get wrong. */
+  document.querySelectorAll('.declare-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var input = document.getElementById('declare-pattern');
+      input.value = b.dataset.pattern;
+      document.getElementById('declare-form').scrollIntoView({behavior: 'smooth', block: 'center'});
+      input.focus();
+    });
+  });
+</script>
+{% endblock %}

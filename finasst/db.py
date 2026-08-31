@@ -87,6 +87,23 @@ CREATE TABLE IF NOT EXISTS remittances (
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Where an outflow goes when it leaves for an account this app has no
+-- statements for. A declaration, NOT evidence: coverage reports these in
+-- their own column, separately from the transfers actually matched against
+-- a real inflow, so "I told the app" never reads as "the app checked".
+CREATE TABLE IF NOT EXISTS destinations (
+    id         INTEGER PRIMARY KEY,
+    pattern    TEXT NOT NULL,             -- matched against the description
+    match_type TEXT NOT NULL DEFAULT 'contains',
+    label      TEXT NOT NULL,             -- what you call this destination
+    kind       TEXT NOT NULL,             -- own_account | external | debt
+    account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    category   TEXT,                      -- 'external' only: file it as spending
+    notes      TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(pattern, match_type)
+);
+
 -- What you are paid, declared rather than inferred. One row per income
 -- source per pay regime: a raise or a new job is a NEW row, and the old one
 -- gets an ended_on. Nothing here is derived from transactions -- it is the

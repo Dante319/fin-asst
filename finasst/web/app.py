@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import analytics, config, coverage, db, income, remittance
+from .. import analytics, config, coverage, db, destinations, income, remittance
 from . import charts
 from ..categorize import categorize_all, seed_rules, set_manual_category
 from ..goals import Goal, add_goal, compare, load_goals, project
@@ -69,6 +69,10 @@ async def lifespan(_app: FastAPI):
         # so it does not belong in a GET either. It runs at startup and after
         # every import -- the only two moments the answer can change.
         coverage.match_internal_transfers(conn)
+        # Declared destinations file their transactions as spending. Same
+        # reasoning as the matcher above: a whole-table write does not belong
+        # in a GET, and the answer only changes at startup and after an import.
+        destinations.apply_all(conn)
     yield
 
 
@@ -305,9 +309,11 @@ async def do_import(
 
     stats = categorize_all(conn)
     if results:
-        # New rows can complete a transfer pair, so re-run the matcher here --
-        # the one place other than startup where the answer can change.
+        # New rows can complete a transfer pair, and can be rows a declared
+        # destination already explains, so re-run both here -- the one place
+        # other than startup where either answer can change.
         coverage.match_internal_transfers(conn)
+        destinations.apply_all(conn)
     return templates.TemplateResponse(request, "import.html", {
         "page": "import",
         "accounts": db.accounts(conn),
@@ -421,6 +427,57 @@ def delete_goal(goal_id: int, conn=Depends(get_conn)):
 # --------------------------------------------------------------------------
 # Income regimes
 # --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# Coverage: resolving the gap by hand
+# --------------------------------------------------------------------------
+
+@app.get("/coverage", response_class=HTMLResponse)
+def coverage_page(request: Request, conn=Depends(get_conn)):
+    cov = coverage.coverage(conn)
+    res = destinations.resolution(conn)
+    return templates.TemplateResponse(request, "coverage.html", {
+        "page": "coverage",
+        "coverage": cov,
+        "resolution": res,
+        "declarations": destinations.all_destinations(conn),
+        "kinds": destinations.KINDS,
+        "categories": [c for c in config.CATEGORIES if c not in config.NON_SPEND_CATEGORIES],
+        "accounts": db.accounts(conn),
+    })
+
+
+@app.post("/coverage/destinations")
+def declare_destination(
+    pattern: str = Form(...),
+    label: str = Form(...),
+    kind: str = Form(...),
+    category: str = Form(""),
+    account_id: str = Form(""),
+    notes: str = Form(""),
+    conn=Depends(get_conn),
+):
+    try:
+        dest = destinations.Destination(
+            pattern=pattern.strip(), label=label.strip(), kind=kind,
+            category=(category.strip() or None),
+            account_id=int(account_id) if account_id.strip() else None,
+            notes=notes,
+        )
+        destinations.add(conn, dest)
+    except ValueError as exc:
+        # The one that fires in practice: "genuinely left" with no category,
+        # which would explain the outflow while still hiding the spending.
+        raise HTTPException(status_code=400, detail=str(exc))
+    destinations.apply_all(conn)
+    return RedirectResponse("/coverage", status_code=303)
+
+
+@app.post("/coverage/destinations/{dest_id}/delete")
+def undeclare_destination(dest_id: int, conn=Depends(get_conn)):
+    destinations.delete(conn, dest_id)
+    return RedirectResponse("/coverage", status_code=303)
+
 
 @app.get("/income", response_class=HTMLResponse)
 def income_page(request: Request, conn=Depends(get_conn)):
