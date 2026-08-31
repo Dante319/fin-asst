@@ -97,6 +97,51 @@ def read_rows(path: Path) -> list[list[str]]:
         return [row for row in csv.reader(fh) if any(c.strip() for c in row)]
 
 
+def _cell_to_str(value) -> str:
+    """Render one openpyxl cell as the string the CSV-shaped importers expect.
+
+    Excel stores numbers and dates as real types, not text, so a column that
+    a CSV export would have written as "82.14" or "2026-07-03" arrives here
+    as a float or a datetime instead. Reformat both back into the plain
+    strings parse_amount / parse_date already know how to read, rather than
+    teaching every importer two input shapes.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float):
+        # Excel has no distinct integer type; 82.0 should read as "82", not
+        # "82.0", so a whole-number amount still parses the same as a CSV's.
+        return f"{value:.10g}"
+    return str(value).strip()
+
+
+def read_excel_rows(path: Path) -> list[list[str]]:
+    """Read the first sheet of an .xlsx/.xls workbook into CSV-shaped rows.
+
+    Only the active (first) sheet is read. A statement export is one table on
+    one sheet; if a workbook ever has more, that is a sign it needs its own
+    importer rather than a guess at which sheet is the real one.
+    """
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        raise ImportError("Reading Excel statements needs openpyxl. Run: uv sync") from exc
+    wb = load_workbook(str(path), read_only=True, data_only=True)
+    try:
+        ws = wb[wb.sheetnames[0]]
+        rows = [
+            [_cell_to_str(cell) for cell in row]
+            for row in ws.iter_rows(values_only=True)
+        ]
+    finally:
+        wb.close()
+    return [row for row in rows if any(c.strip() for c in row)]
+
+
 def header_of(rows: Sequence[Sequence[str]]) -> list[str]:
     return [c.strip().lower() for c in rows[0]] if rows else []
 

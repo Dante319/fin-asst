@@ -7,14 +7,34 @@ from pathlib import Path
 from typing import Sequence
 
 from .amex import AmexImporter, AmexYearEndImporter
-from .base import Importer, ParsedTx, read_rows
+from .base import Importer, ParsedTx, read_excel_rows, read_rows
 from .eqbank import EQBankImporter, read_pdf_text
 from .generic import GenericImporter
 from .simplii import SimpliiImporter
+from .simplii_pdf import SimpliiChequingPdfImporter, SimpliiCreditPdfImporter
 
 # Order matters: specific issuers first, generic last as the catch-all.
 IMPORTERS: list[type[Importer]] = [AmexYearEndImporter, AmexImporter, SimpliiImporter, GenericImporter]
 BY_NAME = {imp.name: imp for imp in IMPORTERS}
+
+# PDF statements are not CSV-shaped rows, so they are not Importer subclasses
+# -- each exposes sniff_text/parse_text instead of sniff/parse. Order matters
+# here too: more specific issuers first.
+PDF_IMPORTERS = [EQBankImporter, SimpliiCreditPdfImporter, SimpliiChequingPdfImporter]
+PDF_BY_NAME = {imp.name: imp for imp in PDF_IMPORTERS}
+
+
+def detect_pdf(text: str):
+    for imp in PDF_IMPORTERS:
+        try:
+            if imp.sniff_text(text):
+                return imp
+        except Exception:
+            continue
+    return None
+
+
+EXCEL_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
 
 
 def detect(rows: Sequence[Sequence[str]]) -> type[Importer] | None:
@@ -57,21 +77,29 @@ def import_file(
 ) -> ImportResult:
     """Load one statement into the database. Safe to run twice on the same file.
 
-    Handles both CSV exports and PDF statements; the extension picks the route.
+    Handles CSV exports, Excel workbooks, and PDF statements; the extension
+    picks the route (a forced --issuer can override a PDF's auto-detection,
+    same as it already could for CSV).
     """
     from ..db import get_or_create_account
 
     path = Path(path)
     check_note: str | None = None
+    suffix = path.suffix.lower()
+    pdf_issuer = PDF_BY_NAME.get(issuer)
 
-    if path.suffix.lower() == ".pdf" or issuer == "eqbank":
+    if suffix == ".pdf" or pdf_issuer:
         text = read_pdf_text(path)
-        if not (EQBankImporter.sniff_text(text) or issuer == "eqbank"):
+        imp = pdf_issuer or detect_pdf(text)
+        if imp is None:
+            names = ", ".join(sorted(PDF_BY_NAME))
             raise ValueError(
                 f"{path.name} is a PDF, but not one this app recognises. "
-                "Only EQ Bank statements are supported as PDFs so far."
+                f"Supported PDF statements so far: {names}. "
+                "Pass --issuer explicitly, or send the statement layout so the "
+                "parser can be extended."
             )
-        txs, check = EQBankImporter.parse_text(text)
+        txs, check = imp.parse_text(text)
         if not txs:
             raise ValueError(f"No transactions found in {path.name}")
         if not check.ok:
@@ -81,9 +109,9 @@ def import_file(
                 "statement layout so the parser can be fixed."
             )
         check_note = check.describe()
-        importer_name = EQBankImporter.name
+        importer_name = imp.name
     else:
-        rows = read_rows(path)
+        rows = read_excel_rows(path) if suffix in EXCEL_SUFFIXES else read_rows(path)
         if not rows:
             raise ValueError(f"{path.name} is empty")
         imp = BY_NAME[issuer] if issuer and issuer in BY_NAME else detect(rows)

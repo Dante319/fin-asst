@@ -171,3 +171,79 @@ def test_the_same_charge_in_both_export_formats_deduplicates(tmp_path):
     result = import_csv(conn, yearend, account_name="Amex")
     assert result.duplicates == 1 and result.inserted == 0
     assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Excel workbooks -- same importers, a different row source
+# ---------------------------------------------------------------------------
+
+def write_xlsx(tmp_path: Path, name: str, rows) -> Path:
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    for row in rows:
+        ws.append(row)
+    p = tmp_path / name
+    wb.save(p)
+    return p
+
+
+def test_read_excel_rows_stringifies_dates_and_numbers():
+    """Excel stores real types, not text -- a date cell and a float cell must
+    come back looking like what a CSV export would have written, since that
+    is the only shape parse_date / parse_amount know how to read."""
+    from datetime import date as _date
+    from finasst.importers.base import read_excel_rows
+
+    def _write(tmp_path):
+        return write_xlsx(tmp_path, "t.xlsx", [
+            ["Date", "Description", "Amount"],
+            [_date(2026, 7, 3), "LOBLAWS #1032 TORONTO ON", 82.14],
+            [_date(2026, 7, 5), "PAYROLL DEPOSIT", -2500],
+        ])
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _write(Path(tmp))
+        rows = read_excel_rows(p)
+        assert rows[1][0] == "2026-07-03"
+        assert rows[1][2] == "82.14"
+        assert rows[2][2] == "-2500"  # a whole-number float reads like an int, not "82.0"
+
+
+def test_excel_workbook_goes_through_the_same_generic_detection(tmp_path):
+    path = write_xlsx(tmp_path, "generic.xlsx", [
+        ["Date", "Merchant", "Amount"],
+        ["2026-07-01", "SHOP A", "20.00"],
+        ["2026-07-02", "SHOP B", "35.00"],
+        ["2026-07-03", "SHOP C", "12.00"],
+    ])
+    conn = db.connect(tmp_path / "t.db")
+    db.init_db(conn)
+    result = import_csv(conn, path, account_name="Test Excel")
+    assert result.inserted == 3
+    assert result.importer == "generic"
+
+
+def test_excel_import_is_idempotent_like_csv(tmp_path):
+    path = write_xlsx(tmp_path, "amex.xlsx", AMEX_ROWS)
+    conn = db.connect(tmp_path / "t.db")
+    db.init_db(conn)
+    first = import_csv(conn, path, account_name="Test Amex")
+    second = import_csv(conn, path, account_name="Test Amex")
+    assert first.inserted == 2
+    assert second.inserted == 0 and second.duplicates == 2
+
+
+# ---------------------------------------------------------------------------
+# PDF dispatch -- more than one PDF format is now recognised automatically
+# ---------------------------------------------------------------------------
+
+def test_detect_pdf_picks_the_right_simplii_format():
+    from finasst.importers import detect_pdf
+    from finasst.importers.simplii_pdf import SimpliiChequingPdfImporter, SimpliiCreditPdfImporter
+    from test_simplii_pdf import CHEQUING_STATEMENT, CREDIT_STATEMENT
+
+    assert detect_pdf(CREDIT_STATEMENT) is SimpliiCreditPdfImporter
+    assert detect_pdf(CHEQUING_STATEMENT) is SimpliiChequingPdfImporter
+    assert detect_pdf("nothing recognisable here") is None

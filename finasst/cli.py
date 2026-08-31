@@ -1,7 +1,7 @@
 """Command line interface.
 
     finasst init
-    finasst import <file.csv> --account "Amex SimplyCash" [--issuer amex]
+    finasst import <file.csv|.xlsx|.pdf> --account "Amex SimplyCash" [--issuer amex]
     finasst categorize [--recategorize]
     finasst review
     finasst summary [--month 2026-07] [--months 3]
@@ -377,10 +377,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init", help="create the database and seed rules").set_defaults(func=cmd_init)
 
-    imp = sub.add_parser("import", help="import statements (CSV exports or EQ Bank PDFs)")
+    imp = sub.add_parser("import", help="import statements (CSV, Excel, or PDF)")
     imp.add_argument("files", nargs="+")
     imp.add_argument("--account", help="account name these rows belong to")
-    imp.add_argument("--issuer", choices=["amex", "amex-yearend", "simplii", "eqbank", "generic"],
+    imp.add_argument("--issuer", choices=["amex", "amex-yearend", "simplii", "simplii-cc-pdf",
+                                           "simplii-chequing-pdf", "eqbank", "generic"],
                      help="force a parser instead of detecting it")
     imp.add_argument("--kind", default="credit", choices=["credit", "chequing", "savings"])
     imp.add_argument("--currency", default="CAD")

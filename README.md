@@ -99,16 +99,26 @@ idempotent.
 
 ## Using your own statements
 
-Export a CSV from each account and import it. Two formats are recognised
-automatically, plus a fallback:
+Import a CSV, an Excel workbook (.xlsx/.xls), or a PDF statement -- the file
+extension picks the route, and `--issuer` forces a specific parser if
+auto-detection guesses wrong. CSV and Excel go through the same
+column-detecting importers (Excel is just read into the same shape a CSV
+export would be); PDF statements each need their own hand-written parser,
+since there is no header row to detect from -- just extracted text.
 
 | Source | Notes |
 |---|---|
-| **Amex Canada** | One export format across Cobalt and SimplyCash. Amex writes a purchase as a positive number; the importer flips it so an outflow is always negative. |
-| **Simplii** | Headerless CIBC-style layout: date, details, funds out, funds in, balance. |
-| **Amex year-end summary** | A whole year in one file, with Amex's own categories. Dates are DD/MM/YYYY and are parsed as such rather than guessed. |
-| **EQ Bank** | PDF statements, since EQ has no CSV export. Text is extracted and every statement must reconcile: opening balance + every parsed transaction has to equal the stated closing balance, or the import is refused. |
-| **Anything else** | Column-guessing fallback. Needs a header row with a recognisable date column and either a signed amount or debit/credit columns. |
+| **Amex Canada** | CSV. One export format across Cobalt and SimplyCash. Amex writes a purchase as a positive number; the importer flips it so an outflow is always negative. |
+| **Simplii (CSV)** | Headerless CIBC-style layout: date, details, funds out, funds in, balance. |
+| **Simplii credit card (PDF)** | The Cash Back Visa statement. Charges are two physical lines (date/merchant, then category/amount); payments are one line. Reconciles to the statement's own previous/new balance. |
+| **Simplii chequing (PDF)** | The no-fee chequing account statement. Text extraction jams the two amount columns together with no separator, so direction and amount are derived from the running balance column instead -- see the comment in `simplii_pdf.py` if a future layout change breaks this. Reconciles to the statement's total funds in/out and closing balance. |
+| **Amex year-end summary** | CSV. A whole year in one file, with Amex's own categories. Dates are DD/MM/YYYY and are parsed as such rather than guessed. |
+| **EQ Bank** | PDF. EQ has no CSV export. Text is extracted and every statement must reconcile: opening balance + every parsed transaction has to equal the stated closing balance, or the import is refused. |
+| **Anything else (CSV/Excel)** | Column-guessing fallback. Needs a header row with a recognisable date column and either a signed amount or debit/credit columns. |
+
+Every PDF importer follows the same rule: a parse that cannot be checked
+against the statement's own totals is not trusted, and a statement that does
+not reconcile is refused rather than imported with a silent gap.
 
 Re-importing a file you have already loaded does nothing, and two exports that
 overlap by a few days do not double-count — each transaction has a fingerprint
@@ -195,7 +205,7 @@ it.
 finasst/
   db.py            SQLite schema and helpers
   config.py        paths, categories, the sign convention
-  importers/       amex.py, simplii.py, generic.py + registry
+  importers/       amex.py, simplii.py, simplii_pdf.py, eqbank.py, generic.py + registry
   categorize.py    seeded rules, matching, learned user rules
   analytics.py     measured facts: totals, breakdowns, recurring charges
   goals.py         the projection model

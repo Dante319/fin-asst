@@ -3,15 +3,18 @@
 <section class="panel">
   <h2>Import a statement</h2>
   <p class="caption">
-    Amex (Cobalt and SimplyCash share one export format) and Simplii are recognised
-    automatically; anything else with a header row falls back to a column-guessing
-    parser. Re-importing a file you have already loaded, or two exports that overlap
-    by a few days, adds nothing twice.
+    CSV, Excel (.xlsx) and PDF statements are all accepted. Amex, Simplii (CSV,
+    credit-card PDF and chequing PDF) and EQ Bank (PDF) are recognised automatically;
+    any other CSV or Excel file with a header row falls back to a column-guessing
+    parser. PDF statements are checked against their own stated balance before
+    anything is saved, and refused if the numbers do not add up. Re-importing a file
+    you have already loaded, or two exports that overlap by a few days, adds nothing
+    twice.
   </p>
 
   <form method="post" enctype="multipart/form-data" class="import-form">
-    <label>CSV files
-      <input type="file" name="files" accept=".csv" multiple required>
+    <label>Statement files
+      <input type="file" name="files" accept=".csv,.xlsx,.xls,.pdf" multiple required>
     </label>
     <label>Account name
       <input type="text" name="account" list="account-list" placeholder="Amex SimplyCash">
@@ -23,7 +26,11 @@
       <select name="issuer">
         <option value="">detect automatically</option>
         <option value="amex">Amex</option>
-        <option value="simplii">Simplii</option>
+        <option value="amex-yearend">Amex (year-end summary)</option>
+        <option value="simplii">Simplii (CSV)</option>
+        <option value="simplii-cc-pdf">Simplii credit card (PDF)</option>
+        <option value="simplii-chequing-pdf">Simplii chequing (PDF)</option>
+        <option value="eqbank">EQ Bank (PDF)</option>
         <option value="generic">generic</option>
       </select>
     </label>
