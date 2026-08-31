@@ -25,6 +25,19 @@ output is how many months each goal *slips* — not a comforting per-goal figure
 
 ## Quick start
 
+If you have `make`, the wrapper handles the environment for you and keeps it out
+of iCloud, which is the cause of nearly every environment problem on this
+project:
+
+```bash
+make sync      # install into ~/.venvs/fin-asst
+make serve     # http://127.0.0.1:8000
+make test
+make doctor    # when something is broken, start here
+```
+
+The longer form, and what `make` is doing:
+
 Dependencies are managed with [uv](https://docs.astral.sh/uv/). It handles the
 Python version, the virtualenv and the lockfile in one tool, and it sidesteps
 the "externally-managed-environment" wall that macOS system Python puts in front
