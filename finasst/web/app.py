@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import analytics, config, coverage, db, remittance
+from .. import analytics, config, coverage, db, income, remittance
 from . import charts
 from ..categorize import categorize_all, seed_rules, set_manual_category
 from ..goals import Goal, add_goal, compare, load_goals, project
@@ -131,14 +131,15 @@ def _surplus(conn) -> tuple[float, str, Optional[str]]:
             return parsed, "set by hand", None
         # Fall through to the computed surplus rather than failing the page.
         avg = analytics.average_surplus(conn, s["lookback"])
-        basis = ", ".join(avg["basis"]) or "no complete months yet"
-        return avg["surplus"], f"average of {basis}", (
+        return avg["surplus"], avg["basis_label"], (
             f"Your surplus override ({raw!r}) is not a number, so it is being ignored. "
             "Clear it or enter a plain figure."
         )
     avg = analytics.average_surplus(conn, s["lookback"])
-    basis = ", ".join(avg["basis"]) or "no complete months yet"
-    return avg["surplus"], f"average of {basis}", avg.get("warning")
+    # basis_label, not a hardcoded "average of": when income is too new to
+    # average, the surplus is declared pay less observed spending, and the
+    # label has to say which of the two you are looking at.
+    return avg["surplus"], avg["basis_label"], avg.get("warning")
 
 
 # --------------------------------------------------------------------------
@@ -173,6 +174,7 @@ def dashboard(request: Request, month: Optional[str] = None, months: int = 1,
         "cov_bars": charts.hbars(cov.destinations, label_key="destination",
                                  value_key="amount", group_key=None),
         "income_warning": coverage.income_regime_warning(conn),
+        "regime": income.current_regime(conn),
         "has_data": bool(totals),
         "months_available": available,
         "selected_month": selected,
@@ -414,6 +416,64 @@ def delete_goal(goal_id: int, conn=Depends(get_conn)):
     conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
     conn.commit()
     return RedirectResponse("/goals", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# Income regimes
+# --------------------------------------------------------------------------
+
+@app.get("/income", response_class=HTMLResponse)
+def income_page(request: Request, conn=Depends(get_conn)):
+    rows = income.regimes(conn)
+    current = income.current_regime(conn)
+    totals = analytics.monthly_totals(conn)
+    avg = analytics.average_surplus(conn, _settings(conn)["lookback"])
+    return templates.TemplateResponse(request, "income.html", {
+        "page": "income",
+        "regimes": rows,
+        "current": current,
+        "today": date.today(),
+        "declared_monthly": income.declared_monthly(conn),
+        "drift": income.drift(conn, current, totals) if current else None,
+        "surplus": avg,
+        "frequencies": list(income.PERIODS_PER_YEAR),
+        "frequency_labels": income.FREQUENCY_LABELS,
+        "observed": [m for m in totals if m["month"] >= current.first_whole_month]
+                    if current else [],
+        # The month in progress is shown but never averaged, and a part-month
+        # row beside full ones reads as a collapse in income if nothing says so.
+        "partial_month": date.today().strftime("%Y-%m"),
+    })
+
+
+@app.post("/income")
+def create_regime(
+    name: str = Form(...),
+    amount: float = Form(...),
+    frequency: str = Form("biweekly"),
+    started_on: str = Form(...),
+    keep_previous: str = Form(""),
+    notes: str = Form(""),
+    conn=Depends(get_conn),
+):
+    try:
+        freq = income.normalise_frequency(frequency)
+        start = date.fromisoformat(started_on)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    income.add_regime(
+        conn,
+        income.Regime(name=name.strip(), started_on=start, amount=amount,
+                      frequency=freq, notes=notes),
+        close_previous=not keep_previous,
+    )
+    return RedirectResponse("/income", status_code=303)
+
+
+@app.post("/income/{regime_id}/delete")
+def remove_regime(regime_id: int, conn=Depends(get_conn)):
+    income.delete_regime(conn, regime_id)
+    return RedirectResponse("/income", status_code=303)
 
 
 @app.post("/settings")

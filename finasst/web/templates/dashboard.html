@@ -57,7 +57,15 @@
 {% endif %}
 {% if income_warning %}
   <p class="notice bad"><span class="ico">&#9888;</span>
-     <span><strong>Income changed.</strong> {{ income_warning }}</span></p>
+     <span><strong>Income changed.</strong> {{ income_warning }}
+     {% if not regime %}<a href="/income">Tell the app what you are paid now</a> and the
+     surplus will stop averaging across the change.{% endif %}</span></p>
+{% endif %}
+{% if regime %}
+  <p class="notice"><span class="ico">&#128188;</span>
+     <span><strong>{{ regime.name }}</strong> &mdash; {{ regime.amount | money }}
+     {{ regime.label }} ({{ regime.monthly | money }}/month) since {{ regime.started_on }}.
+     <a href="/income">Change</a></span></p>
 {% endif %}
 
 {% if coverage.unmatched_outflow > 0.01 %}

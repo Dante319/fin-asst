@@ -5,6 +5,8 @@
     finasst categorize [--recategorize]
     finasst review
     finasst summary [--month 2026-07] [--months 3]
+    finasst income add "New job" --amount 4300 --every biweekly --from 2026-07-10
+    finasst income list
     finasst goal add "Chennai house" --amount 250000 --date 2031-06-01 --priority 20
     finasst goals
     finasst project [--surplus 2500]
@@ -18,7 +20,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from . import analytics, config, coverage, db, remittance
+from . import analytics, config, coverage, db, income, remittance
 from .categorize import categorize_all, seed_rules, set_manual_category
 from .goals import Goal, add_goal, compare, load_goals, project
 from .importers import import_file
@@ -236,6 +238,81 @@ def cmd_fx_report(args) -> int:
     return 0
 
 
+def cmd_income_add(args) -> int:
+    conn = _conn()
+    try:
+        freq = income.normalise_frequency(args.every)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    r = income.Regime(
+        name=args.name.strip(),
+        started_on=date.fromisoformat(args.start),
+        amount=args.amount,
+        frequency=freq,
+        notes=args.notes or "",
+    )
+    closed = conn.execute(
+        "SELECT name FROM income_regimes WHERE ended_on IS NULL AND started_on < ?",
+        (r.started_on.isoformat(),),
+    ).fetchall() if not args.keep_previous else []
+    income.add_regime(conn, r, close_previous=not args.keep_previous)
+    print(f"Recorded {r.name}: {_money(r.amount)} {r.label}, from {r.started_on}.")
+    print(f"That is {_money(r.monthly)}/month on average ({_money(r.annual)}/year) -- "
+          f"{income.PERIODS_PER_YEAR[r.frequency]} pay periods a year, not 24.")
+    for row in closed:
+        print(f"Closed '{row['name']}' the day before, so the two do not both count.")
+    avg = analytics.average_surplus(conn, int(db.get_setting(conn, "surplus_lookback_months", "3")))
+    print(f"\nSurplus baseline is now {_money(avg['surplus'])}/month ({avg['basis_label']}).")
+    if avg.get("warning"):
+        print(f"Note: {avg['warning']}")
+    return 0
+
+
+def cmd_income_list(args) -> int:
+    conn = _conn()
+    rows = income.regimes(conn)
+    if not rows:
+        print("No income declared. Add one with:")
+        print('  finasst income add "Employer" --amount 4300 --every biweekly --from 2026-07-10')
+        return 0
+    print(" ID  Source                    Per period   Frequency        From         To          Per month")
+    print("-" * 100)
+    today = date.today()
+    for r in rows:
+        live = " *" if r.covers(today) else "  "
+        print(f"{r.id:>3}{live}{r.name[:24]:<24}  {_money(r.amount):>10}  {r.label:<15}  "
+              f"{r.started_on}   {str(r.ended_on or '-'):<10}  {_money(r.monthly):>10}")
+    print("\n* = in force today.")
+    total = income.declared_monthly(conn)
+    if total:
+        print(f"Declared income in force: {_money(total)}/month.")
+    totals = analytics.monthly_totals(conn)
+    cur = income.current_regime(conn)
+    if cur:
+        note = income.drift(conn, cur, totals)
+        if note:
+            print(f"\n! {note}")
+        else:
+            # "Agrees" and "nothing to compare against yet" are different
+            # answers, and only one of them is reassuring.
+            months = income.whole_months_in_regime(
+                [m["month"] for m in totals if m["month"] < date.today().strftime("%Y-%m")], cur)
+            print(f"\nStatements for {', '.join(months)} agree with the declaration."
+                  if months else
+                  "\nNo whole month of statements under this regime yet, so nothing to check it against.")
+    return 0
+
+
+def cmd_income_rm(args) -> int:
+    conn = _conn()
+    if income.delete_regime(conn, args.id):
+        print(f"Deleted income regime {args.id}.")
+        return 0
+    print(f"No income regime with id {args.id}.", file=sys.stderr)
+    return 1
+
+
 def cmd_goal_add(args) -> int:
     conn = _conn()
     goal = Goal(
@@ -277,7 +354,9 @@ def _surplus_for(conn, override: float | None) -> tuple[float, str]:
     avg = analytics.average_surplus(conn, lookback)
     if avg.get("warning"):
         print(f"Note: {avg['warning']}")
-    return avg["surplus"], f"average of {', '.join(avg['basis']) or 'no months'}"
+    # The label, not a hardcoded "average of": when the income is too new to
+    # average, the figure is not an average and must not claim to be one.
+    return avg["surplus"], avg["basis_label"]
 
 
 def cmd_project(args) -> int:
@@ -429,6 +508,24 @@ def build_parser() -> argparse.ArgumentParser:
     sm.add_argument("--month")
     sm.add_argument("--months", type=int, default=1)
     sm.set_defaults(func=cmd_summary)
+
+    inc = sub.add_parser("income", help="declare what you are paid, and when that changed")
+    incsub = inc.add_subparsers(dest="income_command", required=True)
+    ia = incsub.add_parser("add", help="record a new job, raise or income source")
+    ia.add_argument("name", help="employer or source, as you refer to it")
+    ia.add_argument("--amount", type=float, required=True,
+                    help="net pay per period, as it lands in your account")
+    ia.add_argument("--every", default="biweekly",
+                    help="weekly | biweekly | semimonthly | monthly | quarterly | annual")
+    ia.add_argument("--from", dest="start", required=True, help="first pay date, YYYY-MM-DD")
+    ia.add_argument("--keep-previous", action="store_true",
+                    help="you hold both jobs at once; do not close the earlier regime")
+    ia.add_argument("--notes")
+    ia.set_defaults(func=cmd_income_add)
+    incsub.add_parser("list", help="every declared income regime").set_defaults(func=cmd_income_list)
+    ir = incsub.add_parser("rm", help="delete a regime by id")
+    ir.add_argument("id", type=int)
+    ir.set_defaults(func=cmd_income_rm)
 
     goal = sub.add_parser("goal", help="manage goals")
     goalsub = goal.add_subparsers(dest="goal_command", required=True)

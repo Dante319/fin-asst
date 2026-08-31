@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>What you are <span class="accent">paid now</span></h1>
+    <p>A surplus averaged over the last few months stops being true the day your
+       income changes. Declaring the change tells the app which months still
+       describe your life &mdash; and lets it project from your new pay before
+       enough statements exist to average.</p>
+  </div>
+</div>
+
+<section class="stat-row">
+  <div class="stat t1 rise">
+    <span class="stat-icon" aria-hidden="true">&#128188;</span>
+    <span class="stat-label">Declared income</span>
+    <span class="stat-value">{{ declared_monthly | money }}<em>/mo</em></span>
+    <span class="stat-sub">
+      {% if current %}{{ current.amount | money }} {{ current.label }} &middot;
+        {{ current.annual | money }}/year{% else %}nothing declared yet{% endif %}
+    </span>
+  </div>
+  <div class="stat t3 rise">
+    <span class="stat-icon" aria-hidden="true">&#128176;</span>
+    <span class="stat-label">Surplus the goals get</span>
+    <span class="stat-value {{ 'negative' if surplus.surplus < 0 }}">{{ surplus.surplus | money }}<em>/mo</em></span>
+    <span class="stat-sub">{{ surplus.basis_label }}</span>
+  </div>
+  <div class="stat t2 rise">
+    <span class="stat-icon" aria-hidden="true">&#128207;</span>
+    <span class="stat-label">How it was worked out</span>
+    <span class="stat-value">
+      {% if surplus.method == 'declared' %}Declared
+      {% elif surplus.method == 'observed' %}Measured
+      {% else %}&mdash;{% endif %}
+    </span>
+    <span class="stat-sub">
+      {% if surplus.method == 'declared' %}pay you stated, less spending you actually did
+      {% elif surplus.method == 'observed' %}entirely from your statements
+      {% else %}no complete month of data yet{% endif %}
+    </span>
+  </div>
+</section>
+
+{% if surplus.warning %}
+  <p class="notice warn"><span class="ico">&#9888;</span><span>{{ surplus.warning }}</span></p>
+{% endif %}
+{% if drift %}
+  <p class="notice bad"><span class="ico">&#9888;</span>
+     <span><strong>Declaration and statements disagree.</strong> {{ drift }}</span></p>
+{% endif %}
+
+<section class="panel accent-cool">
+  <div class="panel-head"><h2>Declared income</h2></div>
+  {% if regimes %}
+  <div class="table-scroll">
+    <table class="goals-table">
+      <thead>
+        <tr><th>Source</th><th class="num">Per period</th><th>How often</th>
+            <th>From</th><th>To</th><th class="num">Per month</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for r in regimes %}
+        <tr>
+          <td><strong>{{ r.name }}</strong>
+            {% if r.covers(today) %}<span class="muted small"> &middot; in force</span>{% endif %}
+            {% if r.notes %}<div class="note">{{ r.notes }}</div>{% endif %}
+          </td>
+          <td class="num">{{ r.amount | money2 }}</td>
+          <td>{{ r.label }}</td>
+          <td>{{ r.started_on }}</td>
+          <td>{{ r.ended_on or '—' }}</td>
+          <td class="num">{{ r.monthly | money }}</td>
+          <td>
+            <form method="post" action="/income/{{ r.id }}/delete" class="inline-form">
+              <button class="link-button" type="submit">remove</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">
+    Per-month figures average across the whole year. Paid every two weeks means
+    26 cheques, not 24 &mdash; treating it as twice a month would quietly lose
+    two of them.
+  </p>
+  {% else %}
+  <p class="caption">Nothing declared. Until you add something here the surplus
+     is averaged over your statements, including any months before an income change.</p>
+  {% endif %}
+</section>
+
+<section class="panel accent-warm">
+  <div class="panel-head"><h2>Add an income change</h2></div>
+  <form method="post" action="/income" class="stacked-form">
+    <label>Source
+      <input type="text" name="name" required placeholder="Employer, as you refer to it">
+    </label>
+    <label>Net pay per period
+      <input type="number" name="amount" step="0.01" required placeholder="4300">
+      <span class="hint">what lands in your account, not the gross salary</span>
+    </label>
+    <label>How often
+      <select name="frequency">
+        {% for f in frequencies %}
+          <option value="{{ f }}" {{ 'selected' if f == 'biweekly' }}>{{ frequency_labels[f] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>First pay date
+      <input type="date" name="started_on" required>
+    </label>
+    <label class="teach-toggle">
+      <input type="checkbox" name="keep_previous" value="1">
+      I still have the previous income too &mdash; do not close it
+    </label>
+    <label>Notes
+      <input type="text" name="notes" placeholder="optional">
+    </label>
+    <button type="submit">Record it</button>
+  </form>
+  <p class="caption">
+    Recording a new source closes the previous one the day before, unless you
+    say otherwise &mdash; two open regimes would count as two jobs.
+  </p>
+</section>
+
+{% if current and observed %}
+<section class="panel">
+  <div class="panel-head"><h2>Months under {{ current.name }}</h2></div>
+  <div class="table-scroll">
+    <table class="goals-table">
+      <thead><tr><th>Month</th><th class="num">Income</th><th class="num">Spend</th>
+                 <th class="num">Saved</th><th class="num">Surplus</th></tr></thead>
+      <tbody>
+      {% for m in observed %}
+        <tr><td>{{ m.month }}
+            {% if m.month == partial_month %}<span class="muted small">&middot; in progress</span>{% endif %}</td>
+            <td class="num">{{ m.income | money }}</td>
+            <td class="num">{{ m.spend | money }}</td>
+            <td class="num">{{ m.saved | money }}</td>
+            <td class="num {{ 'negative' if m.surplus < 0 }}">
+              {% if m.month == partial_month %}&mdash;{% else %}{{ m.surplus | money }}{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">
+    Only whole months from {{ current.first_whole_month }} onwards count towards
+    the baseline. The current month is charted but never averaged.
+  </p>
+</section>
+{% endif %}
+
+{% endblock %}

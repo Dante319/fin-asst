@@ -87,6 +87,23 @@ CREATE TABLE IF NOT EXISTS remittances (
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- What you are paid, declared rather than inferred. One row per income
+-- source per pay regime: a raise or a new job is a NEW row, and the old one
+-- gets an ended_on. Nothing here is derived from transactions -- it is the
+-- statement of intent the surplus baseline is measured against.
+CREATE TABLE IF NOT EXISTS income_regimes (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,             -- employer or source, as you call it
+    started_on TEXT NOT NULL,             -- ISO date of the first pay
+    ended_on   TEXT,                      -- NULL = still being paid
+    amount     REAL NOT NULL,             -- net pay per period, as it lands
+    frequency  TEXT NOT NULL DEFAULT 'biweekly',
+    notes      TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_regime_start ON income_regimes(started_on);
+
 -- Cached reference rates. Populated only by an explicit `finasst fx sync`;
 -- nothing in this app reaches the network on its own.
 CREATE TABLE IF NOT EXISTS fx_rates (

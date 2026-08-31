@@ -2,7 +2,10 @@
 
 Every figure here comes from rows in the database -- nothing is modelled or
 estimated. The modelling lives in goals.py, deliberately kept separate so you
-can always tell measured facts from projections.
+can always tell measured facts from projections. The one exception is declared
+by name: average_surplus() can return method="declared", in which case the
+income half came from a regime you stated rather than from statements, and it
+says so in its own warning.
 
 Two rules this module has learned the hard way:
 
@@ -22,6 +25,7 @@ from collections import defaultdict
 from datetime import date
 from typing import Optional
 
+from . import income
 from .config import NON_SPEND_CATEGORIES, group_of
 
 # Every aggregate in this module starts from this: real money, not an internal
@@ -216,30 +220,8 @@ def top_merchants(
     ]
 
 
-def average_surplus(conn: sqlite3.Connection, lookback: int = 3) -> dict:
-    """The monthly surplus the goal engine spends.
-
-    Uses whole months only -- a partial current month would understate income
-    or spending depending on when in the month you imported, and a surplus
-    figure that swings with the import date is worse than no figure.
-    """
-    totals = monthly_totals(conn)
-    if not totals:
-        return {"surplus": 0.0, "months_used": 0, "basis": [],
-                "warning": "No transactions imported yet."}
-
-    today = date.today().strftime("%Y-%m")
-    complete = [m for m in totals if m["month"] < today]
-    if not complete:
-        return {
-            "surplus": 0.0, "months_used": 0, "basis": [],
-            "warning": "Only the current (incomplete) month has data -- import a "
-                       "full month before trusting projections.",
-        }
-
-    used = complete[-max(int(lookback or 1), 1):]
-    surplus = sum(m["surplus"] for m in used) / len(used)
-
+def _quality_warnings(used: list[dict]) -> list[str]:
+    """What is wrong with the months a baseline was built from."""
     warnings = []
     unc = sum(m["uncategorised"] for m in used)
     spend = sum(m["spend"] for m in used)
@@ -255,10 +237,100 @@ def average_surplus(conn: sqlite3.Connection, lookback: int = 3) -> dict:
             "It is NOT counted as income here -- categorise it, because if any of it "
             "is pay this surplus is too low, and if none of it is, it is correct."
         )
+    return warnings
+
+
+def average_surplus(conn: sqlite3.Connection, lookback: int = 3) -> dict:
+    """The monthly surplus the goal engine spends.
+
+    Uses whole months only -- a partial current month would understate income
+    or spending depending on when in the month you imported, and a surplus
+    figure that swings with the import date is worse than no figure.
+
+    If an income regime is declared (see finasst/income.py), the average never
+    crosses its start: months in which you were paid by a job you no longer
+    have describe an income you no longer receive. When the regime is too new
+    to have enough whole months of its own, the baseline switches method --
+    declared pay minus observed outgoings -- and `method` says so, because a
+    figure built from a declaration deserves to be labelled differently from
+    one built from statements.
+    """
+    empty = {"surplus": 0.0, "months_used": 0, "basis": [], "method": "none",
+             "regime": None, "basis_label": "no complete months yet"}
+    totals = monthly_totals(conn)
+    if not totals:
+        return {**empty, "warning": "No transactions imported yet."}
+
+    today = date.today().strftime("%Y-%m")
+    complete = [m for m in totals if m["month"] < today]
+    if not complete:
+        return {
+            **empty,
+            "warning": "Only the current (incomplete) month has data -- import a "
+                       "full month before trusting projections.",
+        }
+
+    lookback = max(int(lookback or 1), 1)
+    regime = income.current_regime(conn)
+    warnings: list[str] = []
+
+    if regime is not None:
+        eligible = [m for m in complete if m["month"] >= regime.first_whole_month]
+
+        if len(eligible) < income.MIN_REGIME_MONTHS:
+            # The situation this whole mechanism exists for: the income changed
+            # so recently that no honest average of it exists yet. Take the
+            # income from the declaration and the outgoings from the statements,
+            # and be explicit that the two halves came from different places.
+            used = complete[-lookback:]
+            outgoings = sum(m["spend"] + m["saved"] for m in used) / len(used)
+            declared = income.declared_monthly(conn)
+            span = ", ".join(m["month"] for m in used)
+            how_many = ("no whole month of statements under it yet"
+                        if not eligible else
+                        "only one whole month of statements under it")
+            warnings.append(
+                f"{regime.name} began {regime.started_on.isoformat()} and there is "
+                f"{how_many}, which is too few to average. This surplus is declared pay "
+                f"(${declared:,.0f}/month, from ${regime.amount:,.0f} {regime.label}) minus "
+                f"your average outgoings over {span} (${outgoings:,.0f}/month). "
+                "The spending half is measured; the income half is what you told the app."
+            )
+            warnings += _quality_warnings(used)
+            return {
+                "surplus": round(declared - outgoings, 2),
+                "months_used": len(used),
+                "basis": [m["month"] for m in used],
+                "method": "declared",
+                "regime": regime.name,
+                "basis_label": f"declared pay less spending in {span}",
+                "warning": " ".join(warnings) or None,
+            }
+
+        if len(eligible) < len(complete):
+            warnings.append(
+                f"Months before {regime.first_whole_month} are excluded: {regime.name} "
+                f"began {regime.started_on.isoformat()}, and a surplus averaged across "
+                "that change describes the income you used to have."
+            )
+        drifted = income.drift(conn, regime, totals)
+        if drifted:
+            warnings.append(drifted)
+        candidates = eligible
+    else:
+        candidates = complete
+
+    used = candidates[-lookback:]
+    surplus = sum(m["surplus"] for m in used) / len(used)
+    warnings += _quality_warnings(used)
+    span = ", ".join(m["month"] for m in used)
     return {
         "surplus": round(surplus, 2),
         "months_used": len(used),
         "basis": [m["month"] for m in used],
+        "method": "observed",
+        "regime": regime.name if regime else None,
+        "basis_label": f"average of {span}",
         "warning": " ".join(warnings) or None,
     }
 
