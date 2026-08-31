@@ -9,6 +9,10 @@
   </div>
 </div>
 
+{% if notice %}
+  <p class="notice info"><span class="ico">&#10003;</span><span>{{ notice }}</span></p>
+{% endif %}
+
 {% if results %}
   <section class="panel accent-cool">
     <h2>Imported</h2>
@@ -74,7 +78,35 @@
   </section>
 
   <section class="panel plain">
-    <h2>Accounts</h2>
+    <h2>What is already loaded</h2>
+    {% if batches %}
+      <p class="caption">One row per file you imported. Removing a file takes its
+         transactions with it &mdash; useful when a statement went in against the
+         wrong account.</p>
+      <div class="table-scroll">
+        <table class="tight">
+          <tbody>
+          {% for b in batches %}
+            <tr>
+              <td><strong>{{ b.file }}</strong>
+                  <div class="note">{{ b.first }} to {{ b.last }}</div></td>
+              <td class="num muted">{{ b.count }} tx</td>
+              <td>
+                <form method="post" action="/import/undo" class="inline-form">
+                  <input type="hidden" name="source_file" value="{{ b.file }}">
+                  <button class="link-button" type="submit">remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="caption">Nothing imported yet.</p>
+    {% endif %}
+
+    <h2 style="margin-top:26px">Accounts</h2>
     {% if accounts %}
       <p class="caption">Coverage improves with every account you add: money moving
          between two accounts the app knows about is matched as one movement instead

@@ -19,6 +19,10 @@ finasst = "finasst.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    # Only for TestClient in tests/test_web.py. Not a runtime dependency: the
+    # app itself still reaches the network exactly once, when you press the
+    # button that fetches reference rates.
+    "httpx2",
 ]
 
 [tool.pytest.ini_options]

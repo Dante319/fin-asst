@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>The rules that <span class="accent">do the filing</span></h1>
+    <p>Nothing here is a guess you cannot audit. Every categorised transaction
+       got its category because one of these matched it, and you can see which.</p>
+  </div>
+  <form method="post" action="/rules/recategorise" class="inline-form">
+    <button type="submit" class="ghost">Re-run every rule</button>
+  </form>
+</div>
+
+{% if notice %}
+  <p class="notice info"><span class="ico">&#10003;</span><span>{{ notice }}</span></p>
+{% endif %}
+
+<section class="stat-row">
+  <div class="stat t4 rise">
+    <span class="stat-icon" aria-hidden="true">&#9999;</span>
+    <span class="stat-label">Rules you taught</span>
+    <span class="stat-value">{{ mine | length }}</span>
+    <span class="stat-sub">{{ mine | sum(attribute='matches') }} transactions filed by them</span>
+  </div>
+  <div class="stat t1 rise">
+    <span class="stat-icon" aria-hidden="true">&#128218;</span>
+    <span class="stat-label">Built in</span>
+    <span class="stat-value">{{ builtin | length }}</span>
+    <span class="stat-sub">{{ idle | length }} currently matching nothing</span>
+  </div>
+  <div class="stat t2 rise">
+    <span class="stat-icon" aria-hidden="true">&#128269;</span>
+    <span class="stat-label">Still unfiled</span>
+    <span class="stat-value">{{ uncategorised_count }}</span>
+    <span class="stat-sub">
+      {% if uncategorised_count %}<a href="/transactions?only_uncategorised=true">go and look</a>
+      {% else %}nothing needs a rule{% endif %}
+    </span>
+  </div>
+</section>
+
+<section class="panel accent-cool">
+  <h2>Why was this filed there?</h2>
+  <p class="caption">Paste a merchant string exactly as it appears on a statement.
+     You get the rule that wins and the ones it beat.</p>
+  <form method="get" class="inline-form">
+    <input type="search" name="test" value="{{ test }}" style="min-width:320px"
+           placeholder="LOBLAWS #1032 TORONTO ON" aria-label="Description to test">
+    <button type="submit">Explain</button>
+  </form>
+
+  {% if explanation %}
+    {% if explanation.winner %}
+      <p style="margin:16px 0 6px">
+        <strong>{{ explanation.text }}</strong> &rarr;
+        <span class="verdict good">{{ explanation.category }}</span>
+      </p>
+      <p class="caption" style="margin-bottom:10px">
+        Decided by <code>{{ explanation.winner.pattern }}</code>
+        ({{ explanation.winner.match_type }}, priority {{ explanation.winner.priority }},
+        {{ 'yours' if explanation.winner.is_user else 'built in' }}).
+      </p>
+      {% if explanation.also_matched %}
+        <p class="caption" style="margin-bottom:6px">Also matched, but ranked lower:</p>
+        <table class="tight">
+          <tbody>
+          {% for r in explanation.also_matched %}
+            <tr><td><code>{{ r.pattern }}</code></td><td class="muted">{{ r.match_type }}</td>
+                <td class="muted">priority {{ r.priority }}</td><td>{{ r.category }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    {% else %}
+      <p class="notice warn" style="margin-top:16px"><span class="ico">&#9888;</span>
+        <span>No rule matches &ldquo;{{ explanation.text }}&rdquo;. A transaction like this
+        would be left uncategorised. Add a rule for it below.</span></p>
+    {% endif %}
+  {% endif %}
+</section>
+
+<div class="two-col">
+  <section class="panel">
+    <h2>Add a rule</h2>
+    <p class="caption">Yours always outrank the built-in ones. <em>Words</em> matches
+       a whole-word sequence and ignores punctuation, which is what you want almost
+       always; <em>contains</em> is a plain substring; <em>regex</em> is for when you
+       really mean it.</p>
+    <form method="post" action="/rules" class="stacked-form">
+      <label>Pattern <input type="text" name="pattern" required placeholder="petro canada"></label>
+      <label>Category
+        <select name="category" required>
+          {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Match
+        <select name="match_type">
+          <option value="words">words &mdash; whole words, punctuation ignored</option>
+          <option value="contains">contains &mdash; plain substring</option>
+          <option value="regex">regex</option>
+          <option value="exact">exact &mdash; the whole description</option>
+        </select>
+      </label>
+      <button type="submit">Add and re-file</button>
+    </form>
+  </section>
+
+  <section class="panel plain">
+    <h2>Rules you taught</h2>
+    {% if mine %}
+      <p class="caption">The count is transactions each rule actually <em>decides</em>,
+         not ones it merely matches &mdash; a rule that always loses to a
+         higher-ranked one is doing nothing for you.</p>
+      <div class="table-scroll">
+        <table class="tight">
+          <thead><tr><th>Pattern</th><th>Category</th><th class="num">Files</th><th></th></tr></thead>
+          <tbody>
+          {% for r in mine %}
+            <tr>
+              <td><code>{{ r.pattern }}</code>
+                {% if r.examples %}<div class="note">{{ r.examples | join(' &middot; ') | safe }}</div>{% endif %}
+                {% if r.shadowed_by %}<div class="note">never wins &mdash;
+                  <code>{{ r.shadowed_by }}</code> matches first</div>{% endif %}
+              </td>
+              <td><span class="gdot {{ r.category | groupof | groupclass }}"></span>{{ r.category }}</td>
+              <td class="num">{{ r.matches }}</td>
+              <td>
+                <form method="post" action="/rules/{{ r.id }}/delete" class="inline-form">
+                  <button class="link-button" type="submit">remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="caption">None yet. Change a category on the
+         <a href="/transactions">transactions</a> page with learning switched on,
+         and the rule appears here.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="panel plain">
+  <details class="table-view">
+    <summary>All {{ builtin | length }} built-in rules</summary>
+    <p class="caption" style="margin-top:12px">Built-in rules live in the code, not the
+       database, so they cannot be edited here &mdash; the next start would undo it.
+       Add your own for the same merchant instead: yours wins.</p>
+    <div class="table-scroll">
+      <table class="tight">
+        <thead><tr><th>Pattern</th><th>Match</th><th class="num">Priority</th>
+                   <th>Category</th><th class="num">Files</th></tr></thead>
+        <tbody>
+        {% for r in builtin %}
+          <tr class="{{ 'muted' if r.matches == 0 }}">
+            <td><code>{{ r.pattern }}</code></td>
+            <td class="muted small">{{ r.match_type }}</td>
+            <td class="num muted">{{ r.priority }}</td>
+            <td><span class="gdot {{ r.category | groupof | groupclass }}"></span>{{ r.category }}</td>
+            <td class="num">{{ r.matches }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</section>
+{% endblock %}

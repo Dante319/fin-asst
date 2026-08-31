@@ -564,3 +564,20 @@ tr.flash td { animation: flash 1.3s ease-out; }
 .kind-help { margin: 4px 0 0; display: grid; gap: 4px 14px; max-width: 74ch; }
 .kind-help dt { font-weight: 650; font-size: 13px; color: var(--text-primary); }
 .kind-help dd { margin: 0 0 8px; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+
+/* ---- pagination ---- */
+.pager {
+  display: flex; align-items: center; justify-content: center; gap: 18px;
+  margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+.pager a { font-weight: 600; text-decoration: none; padding: 7px 14px;
+           border-radius: 999px; background: var(--surface-2); }
+.pager a:hover { background: var(--surface-3); }
+.pager .off { color: var(--text-muted); padding: 7px 14px; }
+.pager-pos { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* ---- rules ---- */
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+tr.muted code, tr.muted td { color: var(--text-muted); }
+.topbar nav { row-gap: 4px; }

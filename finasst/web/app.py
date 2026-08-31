@@ -6,6 +6,8 @@ binds to 127.0.0.1. Do not expose this to a network.
 """
 from __future__ import annotations
 
+import csv
+import io
 import re
 import shutil
 import tempfile
@@ -15,11 +17,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import analytics, config, coverage, db, destinations, income, remittance
+from .. import analytics, config, coverage, db, destinations, income, remittance, rules
 from . import charts
 from ..categorize import categorize_all, seed_rules, set_manual_category
 from ..goals import Goal, add_goal, compare, load_goals, project
@@ -206,6 +208,9 @@ def dashboard(request: Request, month: Optional[str] = None, months: int = 1,
 # Transactions
 # --------------------------------------------------------------------------
 
+PER_PAGE = 100
+
+
 @app.get("/transactions", response_class=HTMLResponse)
 def transactions(
     request: Request,
@@ -213,40 +218,167 @@ def transactions(
     category: str = "",
     month: str = "",
     only_uncategorised: bool = False,
-    limit: int = 200,
+    page: int = 1,
     conn=Depends(get_conn),
 ):
-    limit = min(max(int(limit or 1), 1), 1000)
-    rows = _query_transactions(conn, q, category, analytics.valid_month(month) or '',
-                               only_uncategorised, limit)
+    """The transaction ledger, one page at a time.
+
+    It used to render every matching row in a single response, capped at 200.
+    Two hundred rows is a document twenty thousand pixels tall, and the cap
+    meant the 201st transaction simply did not exist as far as the page was
+    concerned -- with nothing on screen to say so.
+    """
+    filters = _filters(q, category, month, only_uncategorised)
+    total = _count_transactions(conn, filters)
+    pages = max((total + PER_PAGE - 1) // PER_PAGE, 1)
+    page = min(max(int(page or 1), 1), pages)
+    rows = _query_transactions(conn, filters, limit=PER_PAGE, offset=(page - 1) * PER_PAGE)
+
     return templates.TemplateResponse(request, "transactions.html", {
         "page": "transactions",
         "rows": rows,
         "categories": config.CATEGORIES,
         "months_available": analytics.months_available(conn),
-        "q": q, "category": category, "month": month,
+        "q": q, "category": category, "month": filters["month"],
         "only_uncategorised": only_uncategorised,
+        "total": total,
+        "page_number": page,
+        "pages": pages,
+        "per_page": PER_PAGE,
+        "shown_from": 0 if not total else (page - 1) * PER_PAGE + 1,
+        "shown_to": min(page * PER_PAGE, total),
+        "query_string": _query_string(q, category, filters["month"], only_uncategorised),
+        "filtered": bool(q or category or filters["month"] or only_uncategorised),
+        "bulk_result": request.query_params.get("bulk"),
     })
 
 
-def _query_transactions(conn, q, category, month, only_uncategorised, limit):
-    sql = ["""SELECT t.*, a.name AS account_name FROM transactions t
-              JOIN accounts a ON a.id = t.account_id WHERE 1=1"""]
-    params: list = []
+def _filters(q: str, category: str, month: str, only_uncategorised: bool) -> dict:
+    return {
+        "q": (q or "").strip(),
+        "category": category if category in config.CATEGORIES else "",
+        "month": analytics.valid_month(month) or "",
+        "only_uncategorised": bool(only_uncategorised),
+    }
+
+
+def _query_string(q, category, month, only_uncategorised) -> str:
+    from urllib.parse import urlencode
+
+    parts = {}
     if q:
-        sql.append("AND (t.description LIKE ? OR t.raw_description LIKE ?)")
-        params += [f"%{q}%", f"%{q}%"]
+        parts["q"] = q
     if category:
-        sql.append("AND t.category = ?")
-        params.append(category)
+        parts["category"] = category
     if month:
-        sql.append("AND substr(t.date, 1, 7) = ?")
-        params.append(month)
+        parts["month"] = month
     if only_uncategorised:
+        parts["only_uncategorised"] = "true"
+    return urlencode(parts)
+
+
+def _where(filters: dict) -> tuple[str, list]:
+    sql = ["WHERE 1=1"]
+    params: list = []
+    if filters["q"]:
+        sql.append("AND (t.description LIKE ? OR t.raw_description LIKE ?)")
+        params += [f"%{filters['q']}%", f"%{filters['q']}%"]
+    if filters["category"]:
+        sql.append("AND t.category = ?")
+        params.append(filters["category"])
+    if filters["month"]:
+        sql.append("AND substr(t.date, 1, 7) = ?")
+        params.append(filters["month"])
+    if filters["only_uncategorised"]:
         sql.append("AND t.category IS NULL")
-    sql.append("ORDER BY t.date DESC, t.id DESC LIMIT ?")
-    params.append(limit)
-    return conn.execute(" ".join(sql), params).fetchall()
+    return " ".join(sql), params
+
+
+def _count_transactions(conn, filters: dict) -> int:
+    where, params = _where(filters)
+    return int(conn.execute(
+        f"SELECT COUNT(*) FROM transactions t {where}", params
+    ).fetchone()[0])
+
+
+def _query_transactions(conn, filters: dict, limit: int = PER_PAGE, offset: int = 0):
+    where, params = _where(filters)
+    return conn.execute(
+        f"""SELECT t.*, a.name AS account_name FROM transactions t
+            JOIN accounts a ON a.id = t.account_id {where}
+            ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?""",
+        [*params, limit, offset],
+    ).fetchall()
+
+
+@app.post("/transactions/bulk")
+def bulk_categorise(
+    category: str = Form(...),
+    q: str = Form(""),
+    category_filter: str = Form(""),
+    month: str = Form(""),
+    only_uncategorised: bool = Form(False),
+    conn=Depends(get_conn),
+):
+    """Apply one category to everything the current filter matches.
+
+    Clearing a backlog one dropdown at a time is the reason the backlog never
+    gets cleared. This marks them all as manual corrections, because that is
+    what they are -- a rule did not decide this, you did -- which also means a
+    later re-run of the rules will not undo the work.
+    """
+    if category not in config.CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"{category!r} is not one of the categories.")
+    filters = _filters(q, category_filter, month, only_uncategorised)
+    if not any((filters["q"], filters["category"], filters["month"], filters["only_uncategorised"])):
+        raise HTTPException(
+            status_code=400,
+            detail="Refusing to recategorise every transaction in the database. "
+                   "Narrow the filter first.",
+        )
+    where, params = _where(filters)
+    ids = [r["id"] for r in conn.execute(f"SELECT t.id FROM transactions t {where}", params)]
+    if ids:
+        conn.executemany(
+            "UPDATE transactions SET category = ?, category_source = 'manual' WHERE id = ?",
+            [(category, i) for i in ids],
+        )
+        conn.commit()
+    query = _query_string(filters["q"], filters["category"], filters["month"],
+                          filters["only_uncategorised"])
+    suffix = f"&bulk={len(ids)}" if query else f"?bulk={len(ids)}"
+    return RedirectResponse(f"/transactions?{query}{suffix}" if query else f"/transactions{suffix}",
+                            status_code=303)
+
+
+@app.get("/transactions.csv")
+def export_transactions(
+    q: str = "",
+    category: str = "",
+    month: str = "",
+    only_uncategorised: bool = False,
+    conn=Depends(get_conn),
+):
+    """The current view as a CSV, so the data is never trapped in this app."""
+    filters = _filters(q, category, month, only_uncategorised)
+    rows = _query_transactions(conn, filters, limit=1_000_000, offset=0)
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["date", "description", "raw_description", "account", "amount",
+                     "currency", "category", "category_source", "source_file"])
+    for r in rows:
+        writer.writerow([
+            r["date"], r["description"], r["raw_description"], r["account_name"],
+            f"{r['amount']:.2f}", r["currency"], r["category"] or "",
+            r["category_source"] or "", r["source_file"] or "",
+        ])
+    stamp = date.today().isoformat()
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="finasst-transactions-{stamp}.csv"'},
+    )
 
 
 @app.post("/transactions/{tx_id}/category", response_class=HTMLResponse)
@@ -268,16 +400,33 @@ def recategorise(request: Request, tx_id: int, category: str = Form(...),
 # Import
 # --------------------------------------------------------------------------
 
+def _batches(conn) -> list[dict]:
+    """What each imported file put in the database, newest first."""
+    rows = conn.execute(
+        """SELECT source_file, COUNT(*) n, MIN(date) first, MAX(date) last,
+                  MAX(imported_at) at, SUM(-amount) net
+           FROM transactions WHERE source_file IS NOT NULL
+           GROUP BY source_file ORDER BY at DESC"""
+    ).fetchall()
+    return [
+        {"file": r["source_file"], "count": r["n"], "first": r["first"],
+         "last": r["last"], "imported_at": r["at"], "net": round(float(r["net"] or 0), 2)}
+        for r in rows
+    ]
+
+
 @app.get("/import", response_class=HTMLResponse)
 def import_page(request: Request, conn=Depends(get_conn)):
     return templates.TemplateResponse(request, "import.html", {
         "page": "import",
         "accounts": db.accounts(conn), "results": None,
+        "batches": _batches(conn),
+        "notice": request.query_params.get("notice"),
     })
 
 
 @app.post("/import", response_class=HTMLResponse)
-async def do_import(
+def do_import(
     request: Request,
     files: list[UploadFile] = File(...),
     account: str = Form(""),
@@ -318,6 +467,7 @@ async def do_import(
         "page": "import",
         "accounts": db.accounts(conn),
         "results": results, "errors": errors, "stats": stats,
+        "batches": _batches(conn),
     })
 
 
@@ -531,6 +681,94 @@ def create_regime(
 def remove_regime(regime_id: int, conn=Depends(get_conn)):
     income.delete_regime(conn, regime_id)
     return RedirectResponse("/income", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# Rules
+# --------------------------------------------------------------------------
+
+@app.get("/rules", response_class=HTMLResponse)
+def rules_page(request: Request, test: str = "", conn=Depends(get_conn)):
+    everything = rules.inventory(conn)
+    mine = sorted([r for r in everything if r.is_user], key=lambda r: -r.matches)
+    builtin = sorted([r for r in everything if not r.is_user], key=lambda r: -r.matches)
+    return templates.TemplateResponse(request, "rules.html", {
+        "page": "rules",
+        "mine": mine,
+        "builtin": builtin,
+        "idle": [r for r in builtin if r.matches == 0],
+        "categories": config.CATEGORIES,
+        "test": test,
+        "explanation": rules.explain(conn, test) if test.strip() else None,
+        "uncategorised_count": analytics.uncategorised_count(conn),
+        "notice": request.query_params.get("notice"),
+    })
+
+
+@app.post("/rules")
+def create_rule(
+    pattern: str = Form(...),
+    category: str = Form(...),
+    match_type: str = Form("words"),
+    conn=Depends(get_conn),
+):
+    try:
+        rules.add_rule(conn, pattern, category, match_type)
+    except rules.RuleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    stats = rules.recategorise(conn)
+    return RedirectResponse(
+        f"/rules?notice=Added “{pattern.strip()}”. {stats['matched']} transactions "
+        f"re-filed, {stats['unmatched']} still need a look.",
+        status_code=303,
+    )
+
+
+@app.post("/rules/{rule_id}/delete")
+def drop_rule(rule_id: int, conn=Depends(get_conn)):
+    try:
+        removed = rules.remove_rule(conn, rule_id)
+    except rules.RuleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    stats = rules.recategorise(conn)
+    return RedirectResponse(
+        f"/rules?notice=Removed “{removed.pattern}”. {stats['unmatched']} "
+        "transactions now need a look.",
+        status_code=303,
+    )
+
+
+@app.post("/rules/recategorise")
+def rerun_rules(conn=Depends(get_conn)):
+    stats = rules.recategorise(conn)
+    return RedirectResponse(
+        f"/rules?notice=Re-ran every rule: {stats['matched']} filed, "
+        f"{stats['unmatched']} left. Your manual corrections were not touched.",
+        status_code=303,
+    )
+
+
+# --------------------------------------------------------------------------
+# Import batches
+# --------------------------------------------------------------------------
+
+@app.post("/import/undo")
+def undo_import(source_file: str = Form(...), conn=Depends(get_conn)):
+    """Remove everything one file brought in.
+
+    Importing the wrong file, or the right file against the wrong account, was
+    previously permanent: source_file was recorded on every row and then never
+    used for anything. Manual corrections go with it, which is the honest
+    outcome -- they were corrections to rows that are being deleted.
+    """
+    cur = conn.execute("DELETE FROM transactions WHERE source_file = ?", (source_file,))
+    conn.commit()
+    coverage.match_internal_transfers(conn)
+    return RedirectResponse(
+        f"/import?notice=Removed {cur.rowcount} transactions imported from "
+        f"“{source_file}”.",
+        status_code=303,
+    )
 
 
 @app.post("/settings")

@@ -155,8 +155,17 @@ DEFAULT_SETTINGS = {
 
 
 def connect(path: Optional[Path] = None) -> sqlite3.Connection:
+    """Open the database.
+
+    check_same_thread=False because the web layer hands each request its own
+    connection and closes it when the response is done -- but the request may
+    be solved on one worker thread and executed on another, which the default
+    guard refuses. The guard is protecting against sharing one connection
+    across concurrent threads, which is not what happens here: a connection
+    belongs to exactly one request and is never handed to a second.
+    """
     config.ensure_dirs()
-    conn = sqlite3.connect(path or config.DB_PATH)
+    conn = sqlite3.connect(path or config.DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
