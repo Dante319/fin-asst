@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 DATE_FORMATS = (
     "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m/%d/%y", "%d-%b-%Y",
@@ -144,6 +144,71 @@ def read_excel_rows(path: Path) -> list[list[str]]:
 
 def header_of(rows: Sequence[Sequence[str]]) -> list[str]:
     return [c.strip().lower() for c in rows[0]] if rows else []
+
+
+@dataclass
+class StatementCheck:
+    """Whether parsed rows reconcile against a statement's own stated totals.
+
+    Shared by every statement parser so that "reconciles" means one thing.
+
+    The primary test is always the same: opening + every parsed amount ==
+    closing. If that holds, no row was missed, duplicated or misread, since any
+    of those would move the total.
+
+    Row-by-row balance breaks are weighted differently depending on how the
+    parser got its amounts, which is why `walk_is_evidence` exists rather than
+    each importer quietly applying its own rule:
+
+    * A parser that reads amounts from their own column (EQ Bank) treats a break
+      as cosmetic -- statements list same-day rows in an order the balance column
+      disagrees with, and ordering changes no aggregate. `walk_is_evidence=False`.
+    * A parser that DERIVES which number is the amount from the balance chain
+      (Simplii chequing, where the two numbers arrive ambiguously) has no
+      independent reading, so a break means the derivation itself failed and the
+      row cannot be trusted. `walk_is_evidence=True`.
+    """
+    opening: Optional[float]
+    closing: Optional[float]
+    computed_closing: Optional[float]
+    balance_breaks: int = 0
+    walk_is_evidence: bool = False
+
+    @property
+    def ok(self) -> bool:
+        if self.opening is None or self.closing is None or self.computed_closing is None:
+            return self.balance_breaks == 0
+        totals_agree = abs(self.computed_closing - self.closing) < 0.01
+        if self.walk_is_evidence:
+            return totals_agree and self.balance_breaks == 0
+        return totals_agree
+
+    def describe(self) -> str:
+        if self.ok:
+            if self.closing is not None:
+                note = f"reconciles to the ${self.closing:,.2f} closing balance"
+                if self.balance_breaks:
+                    note += f" ({self.balance_breaks} same-day rows listed out of balance order)"
+                return note
+            return "balances reconcile"
+        parts = []
+        if self.closing is not None and self.computed_closing is not None:
+            drift = self.computed_closing - self.closing
+            if abs(drift) >= 0.01:
+                parts.append(f"closing balance is off by ${drift:,.2f}")
+        if self.balance_breaks:
+            parts.append(f"{self.balance_breaks} rows do not match the running balance")
+        return "; ".join(parts) or "did not reconcile"
+
+
+MONTHS = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
+MONTH_RE = "|".join(MONTHS)
+
+
+def money(text: str) -> float:
+    """Parse a bare statement amount such as '2,314.13'."""
+    return float(str(text).replace(",", "").replace("$", "").strip())
 
 
 class Importer(ABC):

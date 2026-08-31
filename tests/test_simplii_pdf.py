@@ -4,6 +4,8 @@ that keeps the two quirks that matter: charge rows split across two physical
 lines, and chequing rows where two amount columns land jammed together with
 no separator.
 """
+import pytest
+
 from finasst.importers.simplii_pdf import SimpliiChequingPdfImporter, SimpliiCreditPdfImporter
 
 CREDIT_STATEMENT = """Simplii Financial Cash Back Visa
@@ -108,3 +110,56 @@ def test_chequing_statement_that_does_not_reconcile_is_flagged():
     _, check = SimpliiChequingPdfImporter.parse_text(broken)
     assert not check.ok
     assert "off by" in check.describe()
+
+
+def test_a_dropped_chequing_row_cannot_reconcile():
+    """The check must verify OUR parse, not the bank's arithmetic.
+
+    Reconciling `opening + stated_funds_in - stated_funds_out` against the
+    printed closing balance always succeeds, because a bank statement is
+    internally consistent by construction. It says nothing about whether the
+    parser matched every row. Summing the parsed amounts is what catches a row
+    the regex missed -- here, a $2,100 cheque.
+    """
+    dropped = CHEQUING_STATEMENT.replace("Jul 03 Jul 02 CHEQUE #12 528.182,100.00\n", "")
+    txs, check = SimpliiChequingPdfImporter.parse_text(dropped)
+
+    assert len(txs) == 2, "the cheque row is gone"
+    # The statement's own totals still reconcile perfectly against each other,
+    # and the missing $2,100 is silently absorbed into the next row's balance
+    # delta -- so the closing balance still lands exactly on 468.18:
+    assert 2128.18 + 500.00 - 2160.00 == pytest.approx(468.18)
+    assert check.computed_closing == pytest.approx(check.closing)
+    # ...and yet the parse must be rejected, because the row whose amount got
+    # inflated no longer matches the amount printed beside it.
+    assert not check.ok
+    assert check.balance_breaks > 0
+    assert "do not match the running balance" in check.describe()
+
+
+def test_a_sign_error_is_caught_by_the_printed_totals():
+    """A balance walk alone cannot see a row parsed in the wrong direction;
+    the statement's printed funds-in / funds-out totals can."""
+    txs, check = SimpliiChequingPdfImporter.parse_text(CHEQUING_STATEMENT)
+    assert check.ok
+    parsed_in = sum(t.amount for t in txs if t.amount > 0)
+    parsed_out = -sum(t.amount for t in txs if t.amount < 0)
+    assert parsed_in == pytest.approx(500.00)
+    assert parsed_out == pytest.approx(2160.00)
+
+
+def test_statement_check_strictness_differs_by_how_amounts_were_read():
+    """One class, two documented behaviours -- not two classes quietly disagreeing.
+
+    A parser that reads amounts from their own column treats a row-order break
+    as cosmetic. A parser that derives the amount FROM the balance chain has no
+    independent reading, so a break means the derivation failed.
+    """
+    from finasst.importers.base import StatementCheck
+
+    cosmetic = StatementCheck(opening=100.0, closing=150.0, computed_closing=150.0,
+                              balance_breaks=2, walk_is_evidence=False)
+    derived = StatementCheck(opening=100.0, closing=150.0, computed_closing=150.0,
+                             balance_breaks=2, walk_is_evidence=True)
+    assert cosmetic.ok, "totals agree; ordering is not a correctness problem"
+    assert not derived.ok, "the walk was the only evidence, and it broke"

@@ -24,10 +24,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from .base import ParsedTx, clean_description
+from .base import MONTHS, ParsedTx, StatementCheck, clean_description
 
-MONTHS = {m: i for i, m in enumerate(
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
 
 TXN_RE = re.compile(
     r"^(?P<mon>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(?P<day>\d{1,2})\s+"
@@ -58,50 +56,6 @@ def read_pdf_text(path: Path) -> str:
         ) from exc
     reader = PdfReader(str(path))
     return "\n".join(page.extract_text() or "" for page in reader.pages)
-
-
-@dataclass
-class StatementCheck:
-    """Whether the parsed rows actually reconcile against the statement."""
-    opening: Optional[float]
-    closing: Optional[float]
-    computed_closing: Optional[float]
-    balance_breaks: int
-
-    @property
-    def ok(self) -> bool:
-        """Does the statement add up?
-
-        The test that matters is opening + every parsed amount == closing. If
-        that holds, no row was missed, duplicated or misread, because any of
-        those would move the total.
-
-        Row-by-row balance breaks are reported but are NOT a failure on their
-        own: statements list same-day transactions in an order that does not
-        always match the balance column, and ordering changes no aggregate this
-        app computes. Only when the closing balance is unavailable does the
-        walk become the only evidence there is.
-        """
-        if self.opening is None or self.closing is None or self.computed_closing is None:
-            return self.balance_breaks == 0
-        return abs(self.computed_closing - self.closing) < 0.01
-
-    def describe(self) -> str:
-        if self.opening is not None and self.closing is not None and self.ok:
-            note = f"reconciles to the ${self.closing:,.2f} closing balance"
-            if self.balance_breaks:
-                note += f" ({self.balance_breaks} same-day rows listed out of balance order)"
-            return note
-        if self.ok:
-            return "balances reconcile"
-        parts = []
-        if self.closing is not None and self.computed_closing is not None:
-            drift = self.computed_closing - self.closing
-            if abs(drift) >= 0.01:
-                parts.append(f"closing balance is off by ${drift:,.2f}")
-        if self.balance_breaks:
-            parts.append(f"{self.balance_breaks} rows do not match the running balance")
-        return "; ".join(parts) or "did not reconcile"
 
 
 class EQBankImporter:

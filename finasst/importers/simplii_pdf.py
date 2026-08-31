@@ -29,43 +29,10 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Optional
 
-from .base import ParsedTx, clean_description
+from .base import MONTHS, MONTH_RE, ParsedTx, StatementCheck, clean_description
 
-MONTHS = {m: i for i, m in enumerate(
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
-MONTH_RE = "|".join(MONTHS)
 
 AMOUNT_RE = r"[\d,]+\.\d{2}"
-
-
-@dataclass
-class StatementCheck:
-    """Whether the parsed rows reconcile against the statement's own totals."""
-    opening: Optional[float]
-    closing: Optional[float]
-    computed_closing: Optional[float]
-    balance_breaks: int = 0
-
-    @property
-    def ok(self) -> bool:
-        if self.opening is None or self.closing is None or self.computed_closing is None:
-            return self.balance_breaks == 0
-        return abs(self.computed_closing - self.closing) < 0.01 and self.balance_breaks == 0
-
-    def describe(self) -> str:
-        if self.ok:
-            note = "balances reconcile"
-            if self.closing is not None:
-                note = f"reconciles to the ${self.closing:,.2f} closing balance"
-            return note
-        parts = []
-        if self.closing is not None and self.computed_closing is not None:
-            drift = self.computed_closing - self.closing
-            if abs(drift) >= 0.01:
-                parts.append(f"closing balance is off by ${drift:,.2f}")
-        if self.balance_breaks:
-            parts.append(f"{self.balance_breaks} rows do not match the running balance")
-        return "; ".join(parts) or "did not reconcile"
 
 
 def _money(text: str) -> float:
@@ -221,7 +188,7 @@ class SimpliiCreditPdfImporter:
         # row. A charge lowers the parsed amount (it is negative) and raises
         # the balance owed, so the balance walk is opening MINUS the sum.
         computed_closing = round(opening - sum(t.amount for t in out), 2) if opening is not None else None
-        check = StatementCheck(opening=opening, closing=closing, computed_closing=computed_closing)
+        check = StatementCheck(walk_is_evidence=True, opening=opening, closing=closing, computed_closing=computed_closing)
         return out, check
 
 
@@ -295,9 +262,23 @@ class SimpliiChequingPdfImporter:
         closing = _money_line(text, "closing balance")
         total_out = _money_line(text, "total funds out")
         total_in = _money_line(text, "total funds in")
-        computed_closing = None
-        if opening is not None and total_out is not None and total_in is not None:
-            computed_closing = round(opening + total_in - total_out, 2)
-        check = StatementCheck(opening=opening, closing=closing,
+
+        # Verify against what THIS parse produced, not the statement's own
+        # printed subtotals. Reconciling opening + stated_in - stated_out only
+        # proves the bank's arithmetic is self-consistent, which it always is --
+        # a row our regex failed to match would sail through unnoticed. Summing
+        # the parsed amounts is what actually catches a dropped row.
+        computed_closing = round(opening + sum(t.amount for t in out), 2) if opening is not None else None
+
+        # The printed totals are still worth having as a second, independent
+        # check: they catch a row parsed with the wrong sign, which a balance
+        # walk alone cannot see.
+        if total_in is not None and total_out is not None:
+            parsed_in = round(sum(t.amount for t in out if t.amount > 0), 2)
+            parsed_out = round(-sum(t.amount for t in out if t.amount < 0), 2)
+            if abs(parsed_in - total_in) > 0.01 or abs(parsed_out - total_out) > 0.01:
+                breaks += 1
+
+        check = StatementCheck(walk_is_evidence=True, opening=opening, closing=closing,
                                 computed_closing=computed_closing, balance_breaks=breaks)
         return out, check

@@ -58,6 +58,10 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     (r"\brent\b", "regex", "Housing", 30),
     ("property tax", "contains", "Housing", 40),
     ("condo fee", "contains", "Housing", 40),
+    # Rent: paid by a monthly cheque of a constant amount. Inferred from the
+    # pattern rather than stated -- move it if these cheques are something else.
+    (r"^cheque\s*#", "regex", "Housing", 40),
+    ("provident energy", "contains", "Utilities", 35),
 
     ("toronto hydro", "contains", "Utilities", 40),
     ("enbridge", "contains", "Utilities", 40),
@@ -152,6 +156,15 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
 
     ("thank you", "contains", "Transfer", 25),      # card payment, not income
     ("payment received", "contains", "Transfer", 25),
+    # --- paying your own cards from your own chequing account ---
+    # These settle transactions the app has ALREADY imported from the card
+    # statement. Counting them as spending would double every card purchase.
+    ("american express", "contains", "Transfer", 25),
+    ("visa simplii", "contains", "Transfer", 25),
+    ("simplii financial visa", "contains", "Transfer", 25),
+    ("transfer out", "contains", "Transfer", 30),
+    ("transfer in", "contains", "Transfer", 30),
+
     ("card load", "contains", "Transfer", 30),
     ("transfer from card", "contains", "Transfer", 30),
     ("e-transfer", "contains", "Transfer", 40),
