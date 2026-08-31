@@ -1,8 +1,15 @@
-<tr id="tx-{{ tx.id }}" class="{{ 'flash' if learned is defined }}">
+<tr id="tx-{{ tx.id }}" class="{{ 'flash' if taught is defined }}">
   <td class="date">{{ tx.date }}</td>
   <td>
     <span class="gdot {{ tx.category | groupof | groupclass }}"></span>{{ tx.description }}
-    {% if learned %}<span class="learned">learned &ldquo;{{ learned }}&rdquo;</span>{% endif %}
+    {% if taught is defined and taught %}
+      {% if taught.pattern %}
+        <span class="learned">learned &ldquo;{{ taught.pattern }}&rdquo;{% if taught.applied_to %},
+          re-filed {{ taught.applied_to }} more{% endif %}</span>
+      {% elif taught.refused %}
+        <span class="src">{{ taught.refused }}</span>
+      {% endif %}
+    {% endif %}
   </td>
   <td class="muted small">{{ tx.account_name }}</td>
   <td class="num {{ 'inflow' if tx.amount > 0 }}">{{ tx.amount | money2 }}</td>

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from .config import CATEGORIES
@@ -20,7 +21,7 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("loblaw", "contains", "Groceries", 50),
     ("no frills", "contains", "Groceries", 50),
     ("nofrills", "contains", "Groceries", 50),
-    ("metro", "contains", "Groceries", 60),
+    (r"\bmetro\b", "regex", "Groceries", 60),        # not METROLINX
     ("sobeys", "contains", "Groceries", 50),
     ("farm boy", "contains", "Groceries", 50),
     ("freshco", "contains", "Groceries", 50),
@@ -36,24 +37,31 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("ubereats", "contains", "Eats & Drinks", 40),
     ("doordash", "contains", "Eats & Drinks", 40),
     ("skipthedishes", "contains", "Eats & Drinks", 40),
-    ("restaurant", "contains", "Eats & Drinks", 70),
+    (r"\brestaurant\b", "regex", "Eats & Drinks", 70),
     ("pizza", "contains", "Eats & Drinks", 60),
     ("cafe", "contains", "Eats & Drinks", 65),
     ("coffee", "contains", "Eats & Drinks", 65),
-    ("bar ", "contains", "Eats & Drinks", 70),
+    (r"\bbar\b", "regex", "Eats & Drinks", 70),      # not BARBER
     ("lcbo", "contains", "Eats & Drinks", 50),
     ("beer store", "contains", "Eats & Drinks", 50),
 
-    ("uber", "contains", "Transport", 60),   # after uber eats, so it loses to it
+    (r"\buber\b", "regex", "Transport", 60),   # after uber eats, so it loses to it
     ("lyft", "contains", "Transport", 50),
     ("presto", "contains", "Transport", 50),
+    ("metrolinx", "contains", "Transport", 50),
+    ("go transit", "contains", "Transport", 50),
+    # Car hire before the rent rule: "AVIS RENT A CAR" is not housing.
+    ("rent a car", "contains", "Travel", 25),
+    ("car rental", "contains", "Travel", 25),
+    ("avis ", "contains", "Travel", 25),
+    ("hertz", "contains", "Travel", 25),
     ("ttc", "contains", "Transport", 50),
     ("via rail", "contains", "Transport", 50),
-    ("petro-canada", "contains", "Transport", 50),
-    ("esso", "contains", "Transport", 50),
-    ("shell", "contains", "Transport", 55),
+    (r"\bpetro.?canada\b", "regex", "Transport", 50),
+    (r"\besso\b", "regex", "Transport", 50),
+    (r"\bshell\b", "regex", "Transport", 55),        # not SHELLEY\'S
     ("green p", "contains", "Transport", 50),
-    ("parking", "contains", "Transport", 60),
+    (r"\bparking\b", "regex", "Transport", 60),
 
     (r"\brent\b", "regex", "Housing", 30),
     ("property tax", "contains", "Housing", 40),
@@ -72,15 +80,15 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("telus", "contains", "Phone & Internet", 40),
     ("freedom mobile", "contains", "Phone & Internet", 40),
     ("koodo", "contains", "Phone & Internet", 40),
-    ("fizz", "contains", "Phone & Internet", 45),
+    (r"\bfizz\b", "regex", "Phone & Internet", 45),
     ("beanfield", "contains", "Phone & Internet", 40),
 
     ("shoppers drug", "contains", "Health", 45),
     ("rexall", "contains", "Health", 45),
-    ("dental", "contains", "Health", 50),
-    ("physio", "contains", "Health", 50),
+    (r"\bdental\b", "regex", "Health", 50),
+    (r"\bphysio\b", "regex", "Health", 50),
     ("goodlife", "contains", "Health", 45),
-    ("fitness", "contains", "Health", 60),
+    (r"\bfitness\b", "regex", "Health", 60),
 
     ("amazon", "contains", "Shopping", 55),
     ("amzn", "contains", "Shopping", 55),
@@ -101,7 +109,7 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("anthropic", "contains", "Subscriptions", 40),
     ("claude", "contains", "Subscriptions", 40),
     ("github", "contains", "Subscriptions", 45),
-    ("crave", "contains", "Subscriptions", 45),
+    (r"\bcrave\b", "regex", "Subscriptions", 45),
     ("disney", "contains", "Subscriptions", 45),
     ("substack", "contains", "Subscriptions", 45),
 
@@ -113,20 +121,20 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("airbnb", "contains", "Travel", 40),
     ("booking.com", "contains", "Travel", 40),
     ("expedia", "contains", "Travel", 40),
-    ("hotel", "contains", "Travel", 60),
+    (r"\bhotel\b", "regex", "Travel", 60),
     ("flighthub", "contains", "Travel", 40),
 
     ("cineplex", "contains", "Entertainment", 45),
-    ("tiff", "contains", "Entertainment", 45),
+    (r"\btiff\b", "regex", "Entertainment", 45),     # not TIFFANY
     ("ticketmaster", "contains", "Entertainment", 45),
     ("dice.fm", "contains", "Entertainment", 40),
     ("eventbrite", "contains", "Entertainment", 45),
-    ("steam", "contains", "Entertainment", 50),
+    (r"\bsteam\b", "regex", "Entertainment", 50),
     ("playstation", "contains", "Entertainment", 45),
     ("nintendo", "contains", "Entertainment", 45),
 
     ("international transfer", "contains", "Remittance", 25),
-    ("wise", "contains", "Remittance", 35),
+    (r"\bwise\b", "regex", "Remittance", 35),        # not LIKEWISE
     ("remitly", "contains", "Remittance", 35),
     ("western union", "contains", "Remittance", 35),
     ("xe money", "contains", "Remittance", 35),
@@ -136,7 +144,7 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     # Interest RECEIVED is income; interest CHARGED is a cost. Order matters.
     ("interest received", "contains", "Income", 25),
     ("interest earned", "contains", "Income", 25),
-    ("interest", "contains", "Fees & Interest", 60),
+    (r"\binterest\b", "regex", "Fees & Interest", 60),
     ("annual fee", "contains", "Fees & Interest", 40),
     ("foreign transaction fee", "contains", "Fees & Interest", 40),
     ("nsf fee", "contains", "Fees & Interest", 40),
@@ -177,7 +185,7 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     # out. One line to move to "Eats & Drinks" if you disagree.
     ("chefs plate", "contains", "Groceries", 35),
     ("chef's plate", "contains", "Groceries", 35),
-    ("factor", "contains", "Groceries", 45),
+    (r"\bfactor\b", "regex", "Groceries", 45),       # not BENEFACTOR / FACTORY
     ("hellofresh", "contains", "Groceries", 35),
     ("goodfood", "contains", "Groceries", 35),
 
@@ -188,14 +196,14 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
 
     # --- insurance ---
     ("square one insurance", "contains", "Insurance", 30),
-    ("insurance", "contains", "Insurance", 60),
-    ("sonnet", "contains", "Insurance", 45),
-    ("intact", "contains", "Insurance", 45),
+    (r"\binsurance\b", "regex", "Insurance", 60),
+    (r"\bsonnet\b", "regex", "Insurance", 45),
+    (r"\bintact\b", "regex", "Insurance", 45),
 
     # --- personal care ---
-    ("barber", "contains", "Personal Care", 45),
-    ("salon", "contains", "Personal Care", 50),
-    ("spa ", "contains", "Personal Care", 55),
+    (r"\bbarber\b", "regex", "Personal Care", 45),
+    (r"\bsalon\b", "regex", "Personal Care", 50),
+    (r"\bspa\b", "regex", "Personal Care", 55),
 
     # --- entertainment ---
     ("toronto international f", "contains", "Entertainment", 35),  # TIFF
@@ -205,7 +213,7 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     # --- health and supplements ---
     ("naked nutrition", "contains", "Health", 40),
     ("myprotein", "contains", "Health", 40),
-    ("vitamin", "contains", "Health", 55),
+    (r"\bvitamin\b", "regex", "Health", 55),
 
     # --- housing and home services ---
     ("condos", "contains", "Housing", 45),
@@ -214,15 +222,15 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("structube", "contains", "Shopping", 40),
     ("wayfair", "contains", "Shopping", 45),
     ("home depot", "contains", "Shopping", 45),
-    ("rona", "contains", "Shopping", 50),
+    (r"\brona\b", "regex", "Shopping", 50),          # not CORONA
 
     # --- retail ---
     ("holt renfrew", "contains", "Shopping", 45),
     ("apple store", "contains", "Shopping", 40),
     ("adidas", "contains", "Shopping", 45),
     ("decathlon", "contains", "Shopping", 45),
-    ("nike", "contains", "Shopping", 45),
-    ("zara", "contains", "Shopping", 50),
+    (r"\bnike\b", "regex", "Shopping", 45),
+    (r"\bzara\b", "regex", "Shopping", 50),
     ("h&m", "contains", "Shopping", 50),
     ("sephora", "contains", "Personal Care", 45),
     ("fab india", "contains", "Shopping", 45),
@@ -232,17 +240,16 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
 
     # --- eats ---
     ("the keg", "contains", "Eats & Drinks", 45),
-    ("keg -", "contains", "Eats & Drinks", 45),
+    (r"\bkeg\b", "regex", "Eats & Drinks", 45),
     ("chipotle", "contains", "Eats & Drinks", 45),
     ("mcdonald", "contains", "Eats & Drinks", 45),
-    ("subway", "contains", "Eats & Drinks", 50),
-    ("sushi", "contains", "Eats & Drinks", 55),
+    (r"\bsubway\b", "regex", "Eats & Drinks", 50),
+    (r"\bsushi\b", "regex", "Eats & Drinks", 55),
     ("hot pot", "contains", "Eats & Drinks", 55),
     ("momos", "contains", "Eats & Drinks", 55),
-    ("thai", "contains", "Eats & Drinks", 60),
-    ("bakery", "contains", "Eats & Drinks", 55),
-    ("brewery", "contains", "Eats & Drinks", 55),
-    ("bar &", "contains", "Eats & Drinks", 60),
+    (r"\bthai\b", "regex", "Eats & Drinks", 60),
+    (r"\bbakery\b", "regex", "Eats & Drinks", 55),
+    (r"\bbrewery\b", "regex", "Eats & Drinks", 55),
 
     # --- fees ---
     ("membership fee", "contains", "Fees & Interest", 30),
@@ -257,7 +264,25 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
 ]
 
 
+def normalise(text: str) -> str:
+    """Fold punctuation to spaces so word matching is not defeated by a hyphen.
+
+    "PETRO-CANADA 04512" and "PETRO CANADA" have to look the same to a rule,
+    or a merchant you corrected once never matches again.
+    """
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9&']+", " ", (text or "").lower())).strip()
+
+
 def seed_rules(conn: sqlite3.Connection) -> int:
+    """Install the built-in rules, and retire ones this version no longer ships.
+
+    Retiring matters: several seed patterns were plain substrings that caught
+    the wrong merchants ("metro" matched METROLINX, "tiff" matched TIFFANY).
+    Replacing them adds the corrected pattern but leaves the broken one in an
+    existing database forever unless it is removed. Rules you taught (is_user)
+    are never touched.
+    """
+    wanted = {(pattern, match_type) for pattern, match_type, _, _ in SEED_RULES}
     added = 0
     for pattern, match_type, category, priority in SEED_RULES:
         cur = conn.execute(
@@ -266,6 +291,13 @@ def seed_rules(conn: sqlite3.Connection) -> int:
             (pattern, match_type, category, priority),
         )
         added += cur.rowcount
+
+    stale = [
+        r["id"] for r in conn.execute("SELECT id, pattern, match_type FROM rules WHERE is_user = 0")
+        if (r["pattern"], r["match_type"]) not in wanted
+    ]
+    if stale:
+        conn.executemany("DELETE FROM rules WHERE id = ?", [(i,) for i in stale])
     conn.commit()
     return added
 
@@ -276,18 +308,36 @@ def load_rules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def rule_matches(rule: sqlite3.Row, text: str, normalised: str) -> bool:
+    """Does one rule match this description?
+
+    Three kinds:
+      exact     -- the whole cleaned description equals the pattern
+      regex     -- the pattern is a regular expression (seed rules use these
+                   for word boundaries: \bmetro\b must not catch METROLINX)
+      words     -- a whole-word sequence, matched against the NORMALISED text.
+                   This is what rules you teach use, so "petro canada" still
+                   matches "PETRO-CANADA 04512".
+      contains  -- plain substring, matched against the raw lowered text.
+    """
+    kind = rule["match_type"]
+    pattern = rule["pattern"]
+    if kind == "exact":
+        return text.strip().lower() == pattern.lower()
+    if kind == "regex":
+        return bool(re.search(pattern, text or "", re.I))
+    if kind == "words":
+        key = normalise(pattern)
+        return bool(key) and bool(re.search(rf"\b{re.escape(key)}\b", normalised))
+    return pattern.lower() in text.lower()
+
+
 def match_category(text: str, rules: Iterable[sqlite3.Row]) -> Optional[tuple[str, int]]:
     """First matching rule wins, and rules arrive sorted by priority."""
-    haystack = (text or "").lower()
+    text = text or ""
+    normalised = normalise(text)
     for rule in rules:
-        pattern = rule["pattern"].lower()
-        kind = rule["match_type"]
-        hit = (
-            haystack == pattern if kind == "exact"
-            else bool(re.search(rule["pattern"], text or "", re.I)) if kind == "regex"
-            else pattern in haystack
-        )
-        if hit:
+        if rule_matches(rule, text, normalised):
             return rule["category"], int(rule["id"])
     return None
 
@@ -297,12 +347,21 @@ def categorize_all(conn: sqlite3.Connection, recategorize: bool = False) -> dict
 
     Manual categorisations are never overwritten -- your correction outranks
     any rule, including one added later.
+
+    An inflow that no rule explains is left UNCATEGORISED. An earlier version
+    filed it as Income on the reasoning that most inflows are, which is true
+    and still the wrong thing to do: a friend repaying $4,000 became a
+    permanent $1,333/month raise in the surplus the goal engine spends, and
+    because the row was no longer NULL nothing on the dashboard said so.
     """
     rules = load_rules(conn)
-    where = "" if recategorize else "WHERE category IS NULL"
-    if recategorize:
-        where = "WHERE category_source IS NULL OR category_source != 'manual'"
-    rows = conn.execute(f"SELECT id, description, raw_description, amount FROM transactions {where}").fetchall()
+    where = (
+        "WHERE category_source IS NULL OR category_source != 'manual'"
+        if recategorize else "WHERE category IS NULL"
+    )
+    rows = conn.execute(
+        f"SELECT id, description, raw_description, amount FROM transactions {where}"
+    ).fetchall()
 
     matched = unmatched = 0
     for row in rows:
@@ -315,27 +374,48 @@ def categorize_all(conn: sqlite3.Connection, recategorize: bool = False) -> dict
             )
             matched += 1
         else:
-            # An inflow with no rule is far more likely income than "Other".
-            fallback = "Income" if row["amount"] > 0 else None
-            if fallback:
+            if recategorize:
                 conn.execute(
-                    "UPDATE transactions SET category = ?, category_source = 'default' WHERE id = ?",
-                    (fallback, row["id"]),
+                    "UPDATE transactions SET category = NULL, category_source = NULL WHERE id = ?",
+                    (row["id"],),
                 )
-                matched += 1
-            else:
-                unmatched += 1
+            unmatched += 1
     conn.commit()
     return {"matched": matched, "unmatched": unmatched, "considered": len(rows)}
 
 
+@dataclass
+class Taught:
+    """What teaching a merchant actually did, so the UI can say so."""
+    pattern: Optional[str] = None
+    applied_to: int = 0
+    refused: Optional[str] = None
+
+
+def _would_shadow(conn: sqlite3.Connection, key: str, category: str) -> Optional[str]:
+    """Is `key` a broader form of an existing rule for a DIFFERENT category?
+
+    Teaching "uber" from a taxi ride would silently refile every Uber Eats
+    order as Transport, because a taught rule outranks every seed rule. When
+    the key is contained in a longer pattern that means something else, the
+    honest move is to categorise this one transaction and say why nothing was
+    learned.
+    """
+    for r in conn.execute("SELECT pattern, match_type, category FROM rules"):
+        if r["category"] == category:
+            continue
+        other = normalise(r["pattern"])
+        if not other or other == key:
+            continue
+        if len(other) > len(key) and re.search(rf"\b{re.escape(key)}\b", other):
+            return r["pattern"]
+    return None
+
+
 def set_manual_category(
     conn: sqlite3.Connection, tx_id: int, category: str, teach: bool = True
-) -> Optional[str]:
-    """Recategorise one transaction and, optionally, learn the merchant.
-
-    Returns the pattern that was learned, if any.
-    """
+) -> Taught:
+    """Recategorise one transaction and, optionally, learn the merchant."""
     if category not in CATEGORIES:
         raise ValueError(f"Unknown category: {category}")
     row = conn.execute("SELECT description FROM transactions WHERE id = ?", (tx_id,)).fetchone()
@@ -347,32 +427,57 @@ def set_manual_category(
         (category, tx_id),
     )
 
-    learned = None
+    result = Taught()
     if teach:
-        pattern = merchant_key(row["description"])
-        if pattern and len(pattern) >= 4:
-            conn.execute(
-                "INSERT INTO rules(pattern, match_type, category, priority, is_user) "
-                "VALUES (?, 'contains', ?, 10, 1) "
-                "ON CONFLICT(pattern, match_type) DO UPDATE SET category = excluded.category, priority = 10, is_user = 1",
-                (pattern, category),
-            )
-            learned = pattern
-            # Apply the new rule to every other transaction from this merchant
-            # that you have not already corrected by hand.
-            conn.execute(
-                "UPDATE transactions SET category = ?, category_source = 'rule' "
-                "WHERE lower(description) LIKE ? AND id != ? "
-                "AND (category_source IS NULL OR category_source != 'manual')",
-                (category, f"%{pattern}%", tx_id),
-            )
+        key = merchant_key(row["description"])
+        if not key or len(key) < 4:
+            result.refused = "the merchant name is too short to make a reliable rule from"
+        else:
+            shadowed = _would_shadow(conn, key, category)
+            if shadowed:
+                result.refused = (
+                    f"“{key}” would also have changed “{shadowed}” "
+                    "transactions, so only this one was recategorised"
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO rules(pattern, match_type, category, priority, is_user) "
+                    "VALUES (?, 'words', ?, 10, 1) "
+                    "ON CONFLICT(pattern, match_type) DO UPDATE SET "
+                    "category = excluded.category, priority = 10, is_user = 1",
+                    (key, category),
+                )
+                result.pattern = key
+                result.applied_to = _apply_key(conn, key, category, skip_tx_id=tx_id)
     conn.commit()
-    return learned
+    return result
+
+
+def _apply_key(conn: sqlite3.Connection, key: str, category: str, skip_tx_id: int) -> int:
+    """Re-file every other transaction from this merchant you have not corrected.
+
+    Done in Python rather than with SQL LIKE because the match is word-bounded
+    on a normalised description, and SQLite's LIKE has no word boundaries --
+    a '%uber%' LIKE would sweep up UBER EATS.
+    """
+    pattern = re.compile(rf"\b{re.escape(key)}\b")
+    ids = [
+        r["id"] for r in conn.execute(
+            "SELECT id, description FROM transactions "
+            "WHERE id != ? AND (category_source IS NULL OR category_source != 'manual')",
+            (skip_tx_id,),
+        )
+        if pattern.search(normalise(r["description"]))
+    ]
+    if ids:
+        conn.executemany(
+            "UPDATE transactions SET category = ?, category_source = 'rule' WHERE id = ?",
+            [(category, i) for i in ids],
+        )
+    return len(ids)
 
 
 def merchant_key(description: str) -> str:
     """Reduce a merchant string to the stable part worth making a rule from."""
-    s = re.sub(r"[^a-z0-9 &']", " ", (description or "").lower())
-    s = re.sub(r"\s+", " ", s).strip()
-    words = [w for w in s.split() if not w.isdigit()]
+    words = [w for w in normalise(description).split() if not w.isdigit()]
     return " ".join(words[:2]).strip()

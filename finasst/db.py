@@ -105,6 +105,11 @@ MIGRATIONS = [
     # Links an outgoing transaction to the incoming one in another account that
     # it turned out to be. Set by the transfer matcher, not by importers.
     ("transactions", "transfer_peer_id", "INTEGER"),
+    # Whether a goal's target is quoted in today's dollars and should be
+    # inflated to the year it is reached. It was always a field on the Goal
+    # dataclass but never a column, so the stored value was lost and every
+    # goal was inflated regardless of what was chosen.
+    ("goals", "inflate_target", "INTEGER NOT NULL DEFAULT 1"),
 ]
 
 DEFAULT_SETTINGS = {

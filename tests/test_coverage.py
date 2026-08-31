@@ -163,3 +163,45 @@ def test_migration_adds_the_peer_column_to_an_older_database(tmp_path):
     db.init_db(conn)
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(transactions)")}
     assert "transfer_peer_id" in cols
+
+
+# --------------------------------------------------------- regression tests --
+
+def test_ambiguity_is_checked_from_both_sides(tmp_path):
+    """Two identical outflows and one deposit must produce no pair at all.
+
+    One of those outflows is a real expense. Pairing the deposit with whichever
+    row happened to have the lower id removed a genuine expense from the
+    coverage gap -- the exact failure this module exists to prevent.
+    """
+    conn = setup(tmp_path)
+    add(conn, "Chequing", "2026-05-04", "MOVE MONEY", -500, "Transfer")
+    add(conn, "Chequing", "2026-05-04", "RENT CHEQUE", -500, "Housing")
+    add(conn, "Savings", "2026-05-04", "DEPOSIT", 500, "Transfer")
+    assert coverage.match_internal_transfers(conn).matched_pairs == 0
+
+
+def test_a_one_cent_difference_still_matches(tmp_path):
+    """MATCH_TOLERANCE existed but was never applied to anything."""
+    conn = setup(tmp_path)
+    add(conn, "Chequing", "2026-06-01", "TRANSFER OUT", -500.00, "Transfer")
+    add(conn, "Card", "2026-06-02", "TRANSFER IN", 499.99, "Transfer")
+    assert coverage.match_internal_transfers(conn).matched_pairs == 1
+
+
+def test_savings_outflows_count_towards_the_gap(tmp_path):
+    """Money into an account with no statements here is money we cannot see.
+
+    It used to appear in neither the numerator nor the denominator, so a $5,000
+    TFSA contribution simply vanished from the headline percentage.
+    """
+    conn = setup(tmp_path)
+    add(conn, "Chequing", "2026-06-01", "LOBLAWS", -1000, "Groceries")
+    add(conn, "Chequing", "2026-06-02", "WEALTHSIMPLE TFSA", -5000, "Savings & Investments")
+    add(conn, "Chequing", "2026-06-03", "E-TRANSFER TO MOM", -2000, "Transfer")
+    coverage.match_internal_transfers(conn)
+    cov = coverage.coverage(conn)
+    assert cov.total_outflow == 8000
+    assert cov.invisible == 7000
+    assert cov.gap_ratio == pytest.approx(0.875)
+    assert "savings or investments" in cov.verdict()

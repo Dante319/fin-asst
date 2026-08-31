@@ -91,10 +91,13 @@ def cmd_review(args) -> int:
 
 def cmd_set(args) -> int:
     conn = _conn()
-    learned = set_manual_category(conn, args.tx_id, args.category, teach=not args.no_teach)
+    taught = set_manual_category(conn, args.tx_id, args.category, teach=not args.no_teach)
     print(f"Transaction {args.tx_id} -> {args.category}")
-    if learned:
-        print(f"Learned rule: anything matching '{learned}' is now {args.category}.")
+    if taught.pattern:
+        also = f" It also re-filed {taught.applied_to} other transaction(s)." if taught.applied_to else ""
+        print(f"Learned rule: anything matching '{taught.pattern}' is now {args.category}.{also}")
+    elif taught.refused:
+        print(f"Did not learn a rule: {taught.refused}.")
     return 0
 
 

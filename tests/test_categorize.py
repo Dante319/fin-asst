@@ -1,5 +1,7 @@
 from finasst import db
-from finasst.categorize import categorize_all, match_category, merchant_key, seed_rules, set_manual_category
+from finasst.categorize import (
+    categorize_all, load_rules, match_category, merchant_key, seed_rules, set_manual_category,
+)
 
 
 def setup_conn(tmp_path):
@@ -55,7 +57,9 @@ def test_manual_correction_teaches_a_rule_and_back_applies(tmp_path):
     assert conn.execute("SELECT category FROM transactions WHERE id = ?", (a,)).fetchone()["category"] is None
 
     learned = set_manual_category(conn, a, "Eats & Drinks")
-    assert learned == "zorblax kitchen"
+    assert learned.pattern == "zorblax kitchen"
+    assert learned.applied_to == 1
+    assert learned.refused is None
     assert conn.execute("SELECT category FROM transactions WHERE id = ?", (b,)).fetchone()["category"] == "Eats & Drinks"
 
 
@@ -110,3 +114,83 @@ def test_group_of_handles_unknown_and_none():
 
     assert config.group_of(None) == config.UNGROUPED
     assert config.group_of("Something new") == config.UNGROUPED
+
+
+# ------------------------------------------------- rule-matching regressions --
+
+def test_seed_rules_do_not_catch_merchants_that_merely_contain_them(tmp_path):
+    """Plain substring rules were filing the wrong merchants.
+
+    METROLINX became Groceries via "metro", TIFFANY became Entertainment via
+    "tiff", BENEFACTOR became Groceries via "factor". All of them now carry
+    word boundaries.
+    """
+    conn = setup_conn(tmp_path)
+    rules = load_rules(conn)
+
+    def cat(text):
+        hit = match_category(text, rules)
+        return hit[0] if hit else None
+
+    assert cat("METROLINX GO TRANSIT") == "Transport"
+    assert cat("METRO #742 TORONTO") == "Groceries"
+    assert cat("TIFFANY & CO TORONTO ON") != "Entertainment"
+    assert cat("BENEFACTOR CLOTHING") != "Groceries"
+    assert cat("SHELLEY'S FLOWERS") != "Transport"
+    assert cat("BARBER SHOP QUEEN W") == "Personal Care"
+    assert cat("AVIS RENT A CAR") == "Travel"
+    # ...while the rules they replaced still do their job
+    assert cat("SHELL 4471 TORONTO") == "Transport"
+    assert cat("BAR RAVAL TORONTO") == "Eats & Drinks"
+
+
+def test_a_taught_rule_matches_through_punctuation(tmp_path):
+    """merchant_key strips punctuation; matching did not, so nothing matched."""
+    conn = setup_conn(tmp_path)
+    a = add_tx(conn, "ZORBLAX-KITCHEN 04512")
+    b = add_tx(conn, "ZORBLAX KITCHEN GEORGETOWN", d="2026-07-20")
+    categorize_all(conn)
+    taught = set_manual_category(conn, a, "Eats & Drinks")
+    assert taught.pattern == "zorblax kitchen"
+    assert taught.applied_to == 1
+    row = conn.execute("SELECT category FROM transactions WHERE id = ?", (b,)).fetchone()
+    assert row["category"] == "Eats & Drinks"
+
+
+def test_teaching_declines_a_key_that_would_shadow_another_category(tmp_path):
+    """Correcting one Uber ride must not refile every Uber Eats order."""
+    conn = setup_conn(tmp_path)
+    ride = add_tx(conn, "UBER 9042")
+    eats = add_tx(conn, "UBER EATS TORONTO", d="2026-07-09")
+    categorize_all(conn)
+    taught = set_manual_category(conn, ride, "Travel")
+    assert taught.pattern is None
+    assert taught.refused and "uber eats" in taught.refused
+    assert conn.execute("SELECT category FROM transactions WHERE id = ?", (ride,)).fetchone()["category"] == "Travel"
+    assert conn.execute("SELECT category FROM transactions WHERE id = ?", (eats,)).fetchone()["category"] == "Eats & Drinks"
+
+
+def test_an_unexplained_inflow_is_not_income(tmp_path):
+    """A friend repaying $4,000 is not a raise.
+
+    Defaulting every unmatched inflow to Income also hid it from the
+    "still uncategorised" warning, because the row was no longer NULL.
+    """
+    conn = setup_conn(tmp_path)
+    tx = add_tx(conn, "MOM SENT BACK THE CAR MONEY", amount=4000.0)
+    categorize_all(conn)
+    row = conn.execute("SELECT category FROM transactions WHERE id = ?", (tx,)).fetchone()
+    assert row["category"] is None
+
+
+def test_retired_seed_rules_are_removed_from_an_existing_database(tmp_path):
+    conn = setup_conn(tmp_path)
+    conn.execute("INSERT INTO rules(pattern, match_type, category, priority, is_user)"
+                 " VALUES ('metro', 'contains', 'Groceries', 60, 0)")
+    conn.execute("INSERT INTO rules(pattern, match_type, category, priority, is_user)"
+                 " VALUES ('my own rule', 'words', 'Travel', 10, 1)")
+    conn.commit()
+    seed_rules(conn)
+    patterns = {r["pattern"] for r in conn.execute("SELECT pattern FROM rules")}
+    assert "metro" not in patterns          # retired
+    assert "my own rule" in patterns        # yours, never touched

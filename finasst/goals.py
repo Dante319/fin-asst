@@ -28,6 +28,15 @@ UNDATED_HORIZON_MONTHS = 24
 # Goal records
 # --------------------------------------------------------------------------
 
+def _column(row: sqlite3.Row, name: str, default):
+    """Read a column that may not exist yet in an older database file."""
+    try:
+        value = row[name]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
+
+
 @dataclass
 class Goal:
     name: str
@@ -50,6 +59,10 @@ class Goal:
             saved_so_far=float(row["saved_so_far"]),
             priority=int(row["priority"]),
             monthly_min=float(row["monthly_min"]),
+            # Missing from the table until now, so every stored goal was
+            # inflated whatever the user chose. Absent column -> the old
+            # behaviour, which keeps existing databases reading the same.
+            inflate_target=bool(_column(row, "inflate_target", 1)),
             notes=row["notes"] or "",
         )
 
@@ -87,18 +100,20 @@ class Projection:
 def add_goal(conn: sqlite3.Connection, goal: Goal) -> int:
     cur = conn.execute(
         """INSERT INTO goals(name, target_amount, target_date, saved_so_far,
-                             priority, monthly_min, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+                             priority, monthly_min, inflate_target, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(name) DO UPDATE SET
-             target_amount = excluded.target_amount,
-             target_date   = excluded.target_date,
-             saved_so_far  = excluded.saved_so_far,
-             priority      = excluded.priority,
-             monthly_min   = excluded.monthly_min,
-             notes         = excluded.notes""",
+             target_amount  = excluded.target_amount,
+             target_date    = excluded.target_date,
+             saved_so_far   = excluded.saved_so_far,
+             priority       = excluded.priority,
+             monthly_min    = excluded.monthly_min,
+             inflate_target = excluded.inflate_target,
+             notes          = excluded.notes""",
         (goal.name, goal.target_amount,
          goal.target_date.isoformat() if goal.target_date else None,
-         goal.saved_so_far, goal.priority, goal.monthly_min, goal.notes),
+         goal.saved_so_far, goal.priority, goal.monthly_min,
+         1 if goal.inflate_target else 0, goal.notes),
     )
     conn.commit()
     return int(cur.lastrowid)
@@ -191,6 +206,13 @@ def project(
             "months_funded": 0,
             "done_month": None,
             "target_nominal": g.target_amount,
+            # Balance in the goal's own target month, captured as the
+            # simulation passes through it. Read from the timeline instead and
+            # a goal more than ten years out silently reports the month-119
+            # balance, because the timeline stops there.
+            "target_index": (_months_between(start, g.target_date) if g.target_date else None),
+            "balance_at_target": None,
+            "target_at_target": None,
         }
         for g in goals
     }
@@ -199,6 +221,15 @@ def project(
 
     for m in range(horizon_months):
         current = _add_months(start, m)
+
+        # The balance ON the target date is the balance at the start of that
+        # month: before the month's growth, before its contribution. Taken
+        # here rather than read back from `timeline`, which stops at 120 months
+        # and so reported the wrong decade's balance for any long-dated goal.
+        for s in state.values():
+            if s["target_index"] == m:
+                s["balance_at_target"] = s["balance"]
+                s["target_at_target"] = s["target_nominal"]
 
         # Grow existing balances and inflate outstanding targets.
         for s in state.values():
@@ -267,8 +298,17 @@ def project(
                 "unallocated": round(available, 2),
             })
 
-        if all(s["done_month"] is not None for s in state.values()):
+        everyone_done = all(s["done_month"] is not None for s in state.values())
+        pending_snapshot = any(
+            s["target_index"] is not None and s["balance_at_target"] is None
+            and s["target_index"] > m
+            for s in state.values()
+        )
+        if everyone_done and not pending_snapshot:
             break
+        if everyone_done:
+            # Nothing left to allocate; the remaining months only compound.
+            continue
 
     # ---- results ----
     projections: list[GoalProjection] = []
@@ -294,13 +334,14 @@ def project(
                 slip = _months_between(g.target_date, projected_date)
                 on_track = slip <= 0
             # What the balance looks like on the target date itself.
-            n = max(_months_between(start, g.target_date), 0)
-            if n and (projected_date is None or projected_date > g.target_date):
-                target_then = g.target_amount * ((1 + infl) ** n if g.inflate_target else 1)
-                bal = 0.0
-                for row in timeline[:n]:
-                    bal = row["balances"].get(g.name, bal)
-                shortfall = max(round(target_then - bal, 2), 0.0)
+            if projected_date is None or projected_date > g.target_date:
+                bal = s["balance_at_target"]
+                target_then = s["target_at_target"]
+                if target_then is None:
+                    n = max(_months_between(start, g.target_date), 0)
+                    target_then = g.target_amount * ((1 + infl) ** n if g.inflate_target else 1)
+                if bal is not None:
+                    shortfall = max(round(target_then - bal, 2), 0.0)
         else:
             on_track = projected_date is not None
             if projected_date is None:
@@ -369,10 +410,22 @@ def compare(
             shift = p.months_to_fund - b.months_to_fund
         else:
             shift = None
+        # The most valuable answer this function gives is "that goal was the
+        # reason this one never got funded". Reporting it as months_earlier=None
+        # threw exactly that case away.
+        if b.months_to_fund is None and p.months_to_fund is not None:
+            note = "becomes reachable"
+        elif b.months_to_fund is not None and p.months_to_fund is None:
+            note = "stops being reachable"
+        elif shift is None:
+            note = "unfunded either way"
+        else:
+            note = ""
         deltas.append({
             "goal": p.name,
             "baseline_date": b.projected_date.isoformat() if b.projected_date else None,
             "variant_date": p.projected_date.isoformat() if p.projected_date else None,
             "months_earlier": -shift if shift is not None else None,
+            "note": note,
         })
     return {"baseline": base, "variant": variant, "deltas": deltas}

@@ -32,53 +32,74 @@ class MatchResult:
     matched_amount: float
 
 
-def match_internal_transfers(conn: sqlite3.Connection, window_days: int = MATCH_WINDOW_DAYS) -> MatchResult:
+def _candidates(rows, amount: float, when: date, exclude_account: int, window_days: int, used: set) -> list:
+    """Unused rows on the other side, of the same amount, within the window."""
+    return [
+        r for r in rows
+        if r["id"] not in used
+        and r["account_id"] != exclude_account
+        and abs(abs(r["amount"]) - amount) <= MATCH_TOLERANCE
+        and abs((date.fromisoformat(r["date"]) - when).days) <= window_days
+    ]
+
+
+def match_internal_transfers(
+    conn: sqlite3.Connection, window_days: int = MATCH_WINDOW_DAYS
+) -> MatchResult:
     """Pair outgoing transfers with the incoming side in another account.
 
-    Deliberately conservative: same absolute amount, opposite sign, different
-    accounts, within a few days, and each transaction may be used once. A
-    wrong pairing would hide real money, so ambiguity resolves to no match.
+    Deliberately conservative: near-identical amount (within MATCH_TOLERANCE),
+    opposite sign, different accounts, within a few days, and each transaction
+    used at most once.
+
+    The ambiguity test runs in BOTH directions, which it did not used to. Only
+    checking that an outflow had exactly one candidate inflow meant that two
+    $500 outflows on the same day -- one a real transfer, one a rent cheque --
+    competed for a single $500 deposit, and whichever had the lower row id won.
+    That silently reclassified a real expense as an internal movement, which is
+    precisely the failure this module exists to prevent. A pair is now made
+    only when each side is the other's only candidate.
     """
     conn.execute("UPDATE transactions SET transfer_peer_id = NULL")
 
     outs = conn.execute(
-        """SELECT id, account_id, date, amount FROM transactions
-           WHERE amount < 0 ORDER BY date, id"""
+        "SELECT id, account_id, date, amount FROM transactions WHERE amount < 0 ORDER BY date, id"
     ).fetchall()
     ins = conn.execute(
-        """SELECT id, account_id, date, amount FROM transactions
-           WHERE amount > 0 ORDER BY date, id"""
+        "SELECT id, account_id, date, amount FROM transactions WHERE amount > 0 ORDER BY date, id"
     ).fetchall()
 
     used: set[int] = set()
     pairs = 0
     total = 0.0
 
-    by_amount: dict[float, list[sqlite3.Row]] = {}
-    for row in ins:
-        by_amount.setdefault(round(row["amount"], 2), []).append(row)
-
     for out in outs:
-        target = round(-out["amount"], 2)
-        candidates = [
-            r for r in by_amount.get(target, [])
-            if r["id"] not in used and r["account_id"] != out["account_id"]
-        ]
-        if not candidates:
+        if out["id"] in used:
             continue
+        amount = abs(float(out["amount"]))
         out_date = date.fromisoformat(out["date"])
-        near = [
-            r for r in candidates
-            if abs((date.fromisoformat(r["date"]) - out_date).days) <= window_days
-        ]
-        if len(near) != 1:
-            continue  # zero or ambiguous -- leave it unmatched rather than guess
-        peer = near[0]
+
+        near_ins = _candidates(ins, amount, out_date, out["account_id"], window_days, used)
+        if len(near_ins) != 1:
+            continue                      # zero or ambiguous -- do not guess
+        peer = near_ins[0]
+
+        # And the same question from the inflow's side: is this outflow the
+        # only one that could have funded it?
+        peer_date = date.fromisoformat(peer["date"])
+        rival_outs = _candidates(
+            outs, abs(float(peer["amount"])), peer_date, peer["account_id"], window_days,
+            used | {out["id"]},
+        )
+        if rival_outs:
+            continue                      # more than one plausible source
+
         used.add(peer["id"])
+        used.add(out["id"])
         conn.execute("UPDATE transactions SET transfer_peer_id = ? WHERE id = ?", (peer["id"], out["id"]))
         conn.execute("UPDATE transactions SET transfer_peer_id = ? WHERE id = ?", (out["id"], peer["id"]))
         pairs += 1
-        total += target
+        total += amount
 
     conn.commit()
     return MatchResult(pairs, round(total, 2))
@@ -89,22 +110,42 @@ class Coverage:
     visible_spend: float
     unmatched_outflow: float
     matched_internal: float
+    to_untracked_savings: float = 0.0
+    total_outflow: float = 0.0
     destinations: list[dict] = field(default_factory=list)
     accounts: list[str] = field(default_factory=list)
 
     @property
+    def invisible(self) -> float:
+        """Money that left for somewhere with no statements in this app."""
+        return round(self.unmatched_outflow + self.to_untracked_savings, 2)
+
+    @property
     def gap_ratio(self) -> float:
-        base = self.visible_spend + self.unmatched_outflow
-        return (self.unmatched_outflow / base) if base else 0.0
+        """The share of ALL money out that landed somewhere unseen.
+
+        The denominator is every dollar that left, not just spending plus
+        unmatched transfers. An earlier version omitted savings outflows from
+        both terms, so $5,000 into a TFSA the app has no statements for was
+        absent from the numerator AND the denominator, and the headline
+        understated the gap.
+        """
+        return (self.invisible / self.total_outflow) if self.total_outflow else 0.0
 
     def verdict(self) -> str:
-        if self.unmatched_outflow < 0.01:
+        if self.invisible < 0.01:
             return "Every outflow lands in an account this app can see."
-        return (
-            f"${self.unmatched_outflow:,.0f} left your accounts for somewhere this app "
+        note = (
+            f"${self.invisible:,.0f} left your accounts for somewhere this app "
             f"cannot see -- {100 * self.gap_ratio:.0f}% of all money out. Spending "
             f"figures below cover only the rest."
         )
+        if self.to_untracked_savings > 0.01:
+            note += (
+                f" ${self.to_untracked_savings:,.0f} of that went to savings or "
+                "investments, so it is not lost -- just not visible here."
+            )
+        return note
 
 
 def coverage(conn: sqlite3.Connection, since: str | None = None) -> Coverage:
@@ -112,18 +153,17 @@ def coverage(conn: sqlite3.Connection, since: str | None = None) -> Coverage:
     where = "AND date >= ?" if since else ""
     args = (since,) if since else ()
 
-    visible = conn.execute(
-        f"""SELECT COALESCE(SUM(-amount), 0) FROM transactions
-            WHERE amount < 0 {where}
-            AND COALESCE(category, '') NOT IN ('Transfer', 'Savings & Investments')""",
-        args,
-    ).fetchone()[0]
+    def total(extra: str, params=()) -> float:
+        return float(conn.execute(
+            f"""SELECT COALESCE(SUM(-amount), 0) FROM transactions
+                WHERE amount < 0 {where} {extra}""",
+            (*args, *params),
+        ).fetchone()[0])
 
-    matched = conn.execute(
-        f"""SELECT COALESCE(SUM(-amount), 0) FROM transactions
-            WHERE amount < 0 AND transfer_peer_id IS NOT NULL {where}""",
-        args,
-    ).fetchone()[0]
+    all_out = total("")
+    visible = total("AND COALESCE(category, '') NOT IN ('Transfer', 'Savings & Investments')")
+    matched = total("AND transfer_peer_id IS NOT NULL")
+    savings = total("AND transfer_peer_id IS NULL AND category = 'Savings & Investments'")
 
     rows = conn.execute(
         f"""SELECT description, COUNT(*) n, SUM(-amount) s FROM transactions
@@ -140,7 +180,15 @@ def coverage(conn: sqlite3.Connection, since: str | None = None) -> Coverage:
     unmatched = round(sum(d["amount"] for d in destinations), 2)
 
     accounts = [r["name"] for r in conn.execute("SELECT name FROM accounts ORDER BY name")]
-    return Coverage(round(visible, 2), unmatched, round(matched, 2), destinations, accounts)
+    return Coverage(
+        visible_spend=round(visible, 2),
+        unmatched_outflow=unmatched,
+        matched_internal=round(matched, 2),
+        to_untracked_savings=round(savings, 2),
+        total_outflow=round(all_out, 2),
+        destinations=destinations,
+        accounts=accounts,
+    )
 
 
 # ---------------------------------------------------------------------------

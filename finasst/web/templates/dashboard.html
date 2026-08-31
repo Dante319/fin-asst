@@ -204,13 +204,15 @@
 
   <section class="panel plain">
     <h2>Charging you most months</h2>
-    <p class="caption">Your fixed cost &mdash; what you would still pay in a month you did nothing.</p>
+    <p class="caption">Your fixed cost &mdash; what you would still pay in a month you did nothing.
+       Merchants billing a steady amount month after month, totalled per month rather
+       than per charge, and dropped once they go quiet. {{ fixed_cost | money }}/month in all.</p>
     <table class="tight">
       <tbody>
       {% for r in recurring %}
         <tr><td><span class="gdot {{ r.group | groupclass }}"></span>{{ r.merchant }}</td>
             <td class="muted">{{ r.category }}</td>
-            <td class="num">{{ r.avg_amount | money }}</td>
+            <td class="num">{{ r.monthly | money }}</td>
             <td class="muted num">{{ r.months }} mo</td></tr>
       {% else %}
         <tr><td class="muted">Not enough history yet.</td></tr>

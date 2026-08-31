@@ -6,13 +6,15 @@ binds to 127.0.0.1. Do not expose this to a network.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
+from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Form, Request, UploadFile, File
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -27,6 +29,13 @@ BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["money"] = lambda v: f"${v:,.0f}" if v is not None else "-"
 templates.env.filters["money2"] = lambda v: f"${v:,.2f}" if v is not None else "-"
+
+
+def _safe_filename(name: str) -> str:
+    """Reduce an uploaded filename to a harmless leaf name."""
+    leaf = Path(str(name).replace("\\", "/")).name.strip()
+    leaf = re.sub(r"[^A-Za-z0-9._ -]", "_", leaf).lstrip(".")
+    return leaf or "upload"
 
 
 def _group_class(group: str) -> str:
@@ -44,30 +53,89 @@ templates.env.filters["groupof"] = config.group_of
 templates.env.globals["GROUP_ORDER"] = config.GROUP_ORDER
 templates.env.globals["UNGROUPED"] = config.UNGROUPED
 
-app = FastAPI(title="fin-asst")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """One-time setup, instead of once per request.
+
+    Creating the schema, running migrations and re-seeding ~190 rules on every
+    single request is a lot of write traffic to serve a page that only reads,
+    and it made two browser tabs contend for SQLite's write lock. It happens
+    here instead, once, when the server starts.
+    """
+    with closing_conn() as conn:
+        db.init_db(conn)
+        seed_rules(conn)
+        # Pairing internal transfers rewrites a column across the whole table,
+        # so it does not belong in a GET either. It runs at startup and after
+        # every import -- the only two moments the answer can change.
+        coverage.match_internal_transfers(conn)
+    yield
+
+
+app = FastAPI(title="fin-asst", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
-def get_conn():
+@contextmanager
+def closing_conn():
     conn = db.connect()
-    db.init_db(conn)
-    seed_rules(conn)
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def get_conn():
+    """Request-scoped connection, closed when the response is done.
+
+    Previously every request opened a connection and dropped the reference
+    without closing it, leaking a file handle per page view.
+    """
+    conn = db.connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _number(text: str, fallback):
+    """Read a stored setting without letting a bad one take the app down.
+
+    Settings are strings in a table, and one of them used to be free text from
+    a form. Typing "2,500" into the surplus override stored it verbatim, and
+    the float() on the way back out raised on every single page -- including
+    the page with the field that would have fixed it. Now a value that will not
+    parse is ignored and reported, not fatal.
+    """
+    try:
+        return float(str(text).strip().replace(",", "").replace("$", ""))
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _settings(conn) -> dict:
     return {
-        "annual_return_rate": float(db.get_setting(conn, "annual_return_rate", "0.04")),
-        "annual_inflation": float(db.get_setting(conn, "annual_inflation", "0.025")),
-        "lookback": int(db.get_setting(conn, "surplus_lookback_months", "3")),
+        "annual_return_rate": _number(db.get_setting(conn, "annual_return_rate", "0.04"), 0.04),
+        "annual_inflation": _number(db.get_setting(conn, "annual_inflation", "0.025"), 0.025),
+        "lookback": int(_number(db.get_setting(conn, "surplus_lookback_months", "3"), 3)),
         "manual_surplus": db.get_setting(conn, "manual_monthly_surplus", ""),
     }
 
 
 def _surplus(conn) -> tuple[float, str, Optional[str]]:
     s = _settings(conn)
-    if s["manual_surplus"].strip():
-        return float(s["manual_surplus"]), "set by hand", None
+    raw = (s["manual_surplus"] or "").strip()
+    if raw:
+        parsed = _number(raw, None)
+        if parsed is not None:
+            return parsed, "set by hand", None
+        # Fall through to the computed surplus rather than failing the page.
+        avg = analytics.average_surplus(conn, s["lookback"])
+        basis = ", ".join(avg["basis"]) or "no complete months yet"
+        return avg["surplus"], f"average of {basis}", (
+            f"Your surplus override ({raw!r}) is not a number, so it is being ignored. "
+            "Clear it or enter a plain figure."
+        )
     avg = analytics.average_surplus(conn, s["lookback"])
     basis = ", ".join(avg["basis"]) or "no complete months yet"
     return avg["surplus"], f"average of {basis}", avg.get("warning")
@@ -78,14 +146,16 @@ def _surplus(conn) -> tuple[float, str, Optional[str]]:
 # --------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, month: Optional[str] = None, months: int = 1):
-    conn = get_conn()
+def dashboard(request: Request, month: Optional[str] = None, months: int = 1,
+              conn=Depends(get_conn)):
     available = analytics.months_available(conn)
     totals = analytics.monthly_totals(conn)
-    selected = month or (available[0] if available else None)
+    selected = analytics.valid_month(month) or (available[0] if available else None)
+    months = min(max(int(months or 1), 1), 24)
     surplus, basis, warning = _surplus(conn)
 
-    coverage.match_internal_transfers(conn)
+    # Transfer matching is a whole-table write; it runs at startup and after an
+    # import, not on every page view. This route only reads its results.
     cov = coverage.coverage(conn)
 
     categories = analytics.category_breakdown(conn, selected, months)
@@ -118,10 +188,11 @@ def dashboard(request: Request, month: Optional[str] = None, months: int = 1):
         "tx_count": sum(c["count"] for c in categories),
         "merchants": analytics.top_merchants(conn, selected, months, limit=10),
         "recurring": analytics.recurring_charges(conn)[:12],
+        "fixed_cost": analytics.fixed_monthly_cost(conn),
         "surplus": surplus,
         "surplus_basis": basis,
         "surplus_warning": warning,
-        "uncategorised_count": len(analytics.uncategorised(conn, limit=1000)),
+        "uncategorised_count": analytics.uncategorised_count(conn),
     })
 
 
@@ -137,9 +208,11 @@ def transactions(
     month: str = "",
     only_uncategorised: bool = False,
     limit: int = 200,
+    conn=Depends(get_conn),
 ):
-    conn = get_conn()
-    rows = _query_transactions(conn, q, category, month, only_uncategorised, limit)
+    limit = min(max(int(limit or 1), 1), 1000)
+    rows = _query_transactions(conn, q, category, analytics.valid_month(month) or '',
+                               only_uncategorised, limit)
     return templates.TemplateResponse(request, "transactions.html", {
         "page": "transactions",
         "rows": rows,
@@ -171,17 +244,17 @@ def _query_transactions(conn, q, category, month, only_uncategorised, limit):
 
 
 @app.post("/transactions/{tx_id}/category", response_class=HTMLResponse)
-def recategorise(request: Request, tx_id: int, category: str = Form(...), teach: bool = Form(False)):
+def recategorise(request: Request, tx_id: int, category: str = Form(...),
+                 teach: bool = Form(False), conn=Depends(get_conn)):
     """Inline recategorisation. Returns just the updated row for HTMX to swap in."""
-    conn = get_conn()
-    learned = set_manual_category(conn, tx_id, category, teach=teach)
+    taught = set_manual_category(conn, tx_id, category, teach=teach)
     row = conn.execute(
         """SELECT t.*, a.name AS account_name FROM transactions t
            JOIN accounts a ON a.id = t.account_id WHERE t.id = ?""",
         (tx_id,),
     ).fetchone()
     return templates.TemplateResponse(request, "_tx_row.html", {
-        "tx": row, "categories": config.CATEGORIES, "learned": learned,
+        "tx": row, "categories": config.CATEGORIES, "taught": taught,
     })
 
 
@@ -190,8 +263,7 @@ def recategorise(request: Request, tx_id: int, category: str = Form(...), teach:
 # --------------------------------------------------------------------------
 
 @app.get("/import", response_class=HTMLResponse)
-def import_page(request: Request):
-    conn = get_conn()
+def import_page(request: Request, conn=Depends(get_conn)):
     return templates.TemplateResponse(request, "import.html", {
         "page": "import",
         "accounts": db.accounts(conn), "results": None,
@@ -205,27 +277,35 @@ async def do_import(
     account: str = Form(""),
     issuer: str = Form(""),
     kind: str = Form("credit"),
+    conn=Depends(get_conn),
 ):
-    conn = get_conn()
     results, errors = [], []
-    for upload in files:
-        if not upload.filename:
-            continue
-        tmp = Path(tempfile.gettempdir()) / upload.filename
-        with open(tmp, "wb") as fh:
-            shutil.copyfileobj(upload.file, fh)
-        try:
-            results.append(import_file(
-                conn, tmp,
-                account_name=account.strip() or Path(upload.filename).stem,
-                issuer=issuer or None, kind=kind,
-            ))
-        except Exception as exc:
-            errors.append(f"{upload.filename}: {exc}")
-        finally:
-            tmp.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix="finasst-import-") as staging:
+        for upload in files:
+            if not upload.filename:
+                continue
+            # The browser controls this string, and pathlib treats an absolute
+            # right-hand operand as replacing the base entirely -- a filename of
+            # "/Users/you/.zshrc" wrote the upload over that file and then
+            # deleted it. Keep the last path component and nothing else.
+            safe = _safe_filename(upload.filename)
+            tmp = Path(staging) / safe
+            with open(tmp, "wb") as fh:
+                shutil.copyfileobj(upload.file, fh)
+            try:
+                results.append(import_file(
+                    conn, tmp,
+                    account_name=account.strip() or Path(safe).stem,
+                    issuer=issuer or None, kind=kind,
+                ))
+            except Exception as exc:
+                errors.append(f"{upload.filename}: {exc}")
 
     stats = categorize_all(conn)
+    if results:
+        # New rows can complete a transfer pair, so re-run the matcher here --
+        # the one place other than startup where the answer can change.
+        coverage.match_internal_transfers(conn)
     return templates.TemplateResponse(request, "import.html", {
         "page": "import",
         "accounts": db.accounts(conn),
@@ -238,8 +318,7 @@ async def do_import(
 # --------------------------------------------------------------------------
 
 @app.get("/remittances", response_class=HTMLResponse)
-def remittances_page(request: Request):
-    conn = get_conn()
+def remittances_page(request: Request, conn=Depends(get_conn)):
     remittance.sync_from_transactions(conn)
     rep = remittance.report(conn)
     return templates.TemplateResponse(request, "remittances.html", {
@@ -253,17 +332,16 @@ def record_remittance(
     received: float = Form(...),
     currency: str = Form("INR"),
     provider: str = Form(""),
+    conn=Depends(get_conn),
 ):
-    conn = get_conn()
     remittance.sync_from_transactions(conn)
     remittance.set_received(conn, tx_id, received, provider=provider or None, currency=currency)
     return RedirectResponse("/remittances", status_code=303)
 
 
 @app.post("/remittances/rates/fetch")
-def fetch_reference_rates():
+def fetch_reference_rates(conn=Depends(get_conn)):
     """The only route in the app that touches the network, and only when clicked."""
-    conn = get_conn()
     remittance.sync_from_transactions(conn)
     rep = remittance.report(conn)
     remittance.fetch_rates(conn, [t.date for t in rep.transfers])
@@ -275,8 +353,8 @@ def fetch_reference_rates():
 # --------------------------------------------------------------------------
 
 @app.get("/goals", response_class=HTMLResponse)
-def goals_page(request: Request, surplus: Optional[float] = None, without: str = ""):
-    conn = get_conn()
+def goals_page(request: Request, surplus: Optional[float] = None, without: str = "",
+               conn=Depends(get_conn)):
     goals = load_goals(conn)
     s = _settings(conn)
     computed, basis, warning = _surplus(conn)
@@ -319,8 +397,8 @@ def create_goal(
     priority: int = Form(100),
     monthly_min: float = Form(0.0),
     notes: str = Form(""),
+    conn=Depends(get_conn),
 ):
-    conn = get_conn()
     add_goal(conn, Goal(
         name=name.strip(),
         target_amount=target_amount,
@@ -332,8 +410,7 @@ def create_goal(
 
 
 @app.post("/goals/{goal_id}/delete")
-def delete_goal(goal_id: int):
-    conn = get_conn()
+def delete_goal(goal_id: int, conn=Depends(get_conn)):
     conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
     conn.commit()
     return RedirectResponse("/goals", status_code=303)
@@ -345,10 +422,17 @@ def update_settings(
     annual_inflation: float = Form(...),
     surplus_lookback_months: int = Form(3),
     manual_monthly_surplus: str = Form(""),
+    conn=Depends(get_conn),
 ):
-    conn = get_conn()
     db.set_setting(conn, "annual_return_rate", annual_return_rate)
     db.set_setting(conn, "annual_inflation", annual_inflation)
     db.set_setting(conn, "surplus_lookback_months", surplus_lookback_months)
-    db.set_setting(conn, "manual_monthly_surplus", manual_monthly_surplus.strip())
+    raw = manual_monthly_surplus.strip()
+    if raw and _number(raw, None) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{raw!r} is not a number. Leave the surplus override blank to "
+                   "compute it from your transactions, or enter a plain figure.",
+        )
+    db.set_setting(conn, "manual_monthly_surplus", raw)
     return RedirectResponse("/goals", status_code=303)
