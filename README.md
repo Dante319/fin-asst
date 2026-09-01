@@ -191,8 +191,52 @@ finasst goal add NAME --amount N --date YYYY-MM-DD [--priority N] [--monthly-min
 finasst goals
 finasst project [--surplus N]
 finasst whatif --without "Goal name"
+finasst mcp                        answer Claude's questions over MCP (read-only)
 finasst serve
 ```
+
+## Asking Claude about it
+
+`finasst mcp` exposes this app's own calculations to Claude as a set of tools, so
+you can ask questions the pages do not answer -- "what changed between June and
+July", "which subscriptions did I start this year", "what would get my committed
+costs below a third of my income".
+
+Add this to `claude_desktop_config.json` (Claude Desktop -> Settings ->
+Developer -> Edit Config), with the absolute path to the `finasst` in your
+virtualenv:
+
+```json
+{
+  "mcpServers": {
+    "fin-asst": {
+      "command": "/Users/you/.venvs/fin-asst/bin/finasst",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The design constraint is the one the rest of the app already follows: **the
+model never does arithmetic.** It picks a question from a fixed catalogue and
+gets back the figure this app would put on the page, computed by the same code.
+It cannot sum a list of transactions and call that your grocery bill, because
+`search_transactions` hands back a capped page and says so in the reply.
+
+Three properties worth knowing:
+
+- **Read-only, enforced by SQLite.** The connection is opened in SQLite's own
+  read-only mode, so it is a guarantee rather than a promise. Claude can explain
+  and suggest; categorising, adding rules and editing goals stay yours.
+- **Caveats travel with every number.** Each result carries the window it covers
+  and flags uncategorised spending, money leaving for accounts you have not
+  imported, and an income change mid-window. A figure that arrives without its
+  qualifications gets quoted without them.
+- **The database never leaves your machine.** The server runs locally over this
+  process's own pipes. What does reach Anthropic is the answers to the questions
+  asked -- category totals, merchant names, the rows a question touches -- the
+  same as anything else you put in a Claude conversation. If that is not a trade
+  you want, leave the config block out; nothing else in the app depends on it.
 
 ## Findings, and the forecast
 
@@ -284,7 +328,9 @@ uv run pytest
 - **Bank auto-sync.** Every option costs money at any real volume or hands a
   third party your banking credentials.
 - **A model anywhere near a number.** There is an optional language model, and
-  it has exactly two jobs, both at the edges. It can **propose rules** for
+  it has exactly three jobs, all at the edges -- the third being the MCP server
+  above, which lets Claude choose which of this app's calculations to run
+  without ever performing one itself. It can **propose rules** for
   merchants nothing matched -- it never writes a category onto a transaction;
   you accept a proposal, and what you get is an ordinary user rule, visible on
   the Rules page, applied by the same deterministic matcher as everything else.

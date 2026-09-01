@@ -186,6 +186,25 @@ def connect(path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+def connect_readonly(path: Optional[Path] = None) -> sqlite3.Connection:
+    """Open the database in a mode SQLite itself will not let us write through.
+
+    Used by the assistant. "Read-only by convention" means one careless call
+    away from a write; SQLite's own read-only mode means the guarantee does not
+    depend on anybody remembering. It also means the assistant cannot run
+    migrations, so a database that has never been opened by the app proper
+    reports that rather than quietly half-working.
+    """
+    target = Path(path or config.DB_PATH)
+    if not target.exists():
+        raise FileNotFoundError(
+            f"No database at {target}. Run `finasst init` and import a statement first."
+        )
+    conn = sqlite3.connect(f"file:{target}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def apply_migrations(conn: sqlite3.Connection) -> None:
     existing = {
         table: {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}

@@ -639,6 +639,13 @@ def cmd_suggest(args) -> int:
     return 0
 
 
+def cmd_mcp(args) -> int:
+    """Serve the assistant over stdio for an MCP client such as Claude Desktop."""
+    from .mcp_server import main as serve_mcp
+
+    return serve_mcp(args.db)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="finasst", description="Local-first personal finance assistant")
     sub = p.add_subparsers(dest="command", required=True)
@@ -772,6 +779,11 @@ def build_parser() -> argparse.ArgumentParser:
     sg.add_argument("--list", action="store_true", help="show proposals already cached")
     sg.add_argument("--accept", metavar="KEY", help="turn one proposal into a rule")
     sg.set_defaults(func=cmd_suggest)
+
+    mcp = sub.add_parser(
+        "mcp", help="answer questions from Claude over MCP (read-only, stdio)")
+    mcp.add_argument("--db", default=None, help="database to read (default: the usual one)")
+    mcp.set_defaults(func=cmd_mcp)
 
     sv = sub.add_parser("serve", help="run the local web app")
     sv.add_argument("--host", default="127.0.0.1")
