@@ -161,6 +161,15 @@ SEED_RULES: list[tuple[str, str, str, int]] = [
     ("payroll", "contains", "Income", 30),
     ("direct deposit", "contains", "Income", 35),
     ("polyai", "contains", "Income", 30),
+    # Employers, by the string the deposit actually arrives as. Simplii
+    # truncates the payer name, so "Nexxt Intelligence" lands as
+    # "Nexxt Intellige" and no generic rule catches it -- $14,543 of pay sat
+    # uncategorised, which made the surplus read negative.
+    ("nexxt intellige", "contains", "Income", 28),
+    ("people center", "contains", "Income", 28),
+    # A refund from the CRA is income, not a mystery deposit.
+    ("tax refund", "contains", "Income", 28),
+    ("rembours", "contains", "Income", 28),
 
     ("thank you", "contains", "Transfer", 25),      # card payment, not income
     ("payment received", "contains", "Transfer", 25),

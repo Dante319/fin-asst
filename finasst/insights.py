@@ -79,8 +79,7 @@ def fixed_costs(conn: sqlite3.Connection, window: int = 6) -> dict[str, dict]:
     bill and half a hydro bill into a figure described as money that goes out
     whether or not you do anything.
     """
-    months = [m["month"] for m in analytics.monthly_totals(conn)
-              if m["month"] < date.today().strftime("%Y-%m")][-window:]
+    months = analytics.complete_months(conn, analytics.SETTLED_TOLERANCE_DAYS)[-window:]
     if len(months) < MIN_HISTORY_MONTHS:
         return {}
     out = {}
@@ -372,7 +371,8 @@ def possible_duplicates(conn: sqlite3.Connection, months: Optional[list[str]] = 
 
 def fixed_cost_pressure(conn: sqlite3.Connection, totals: list[dict]) -> list[Insight]:
     """How much of your income is spoken for before you decide anything."""
-    complete = [m for m in totals if m["month"] < date.today().strftime("%Y-%m")]
+    covered = set(analytics.complete_months(conn, analytics.SETTLED_TOLERANCE_DAYS))
+    complete = [m for m in totals if m["month"] in covered]
     if len(complete) < MIN_HISTORY_MONTHS:
         return []
     fixed = committed_monthly(conn)
@@ -432,20 +432,21 @@ def forecast(conn: sqlite3.Connection, ahead: int = FORECAST_MONTHS) -> Forecast
     The range matters more than the midpoint. A forecast quoted as one number
     invites the reader to treat it as a promise.
     """
-    totals = analytics.monthly_totals(conn)
-    this_month = date.today().strftime("%Y-%m")
-    complete = [m for m in totals if m["month"] < this_month]
+    covered = set(analytics.complete_months(conn, analytics.SETTLED_TOLERANCE_DAYS))
+    complete = [m for m in analytics.monthly_totals(conn) if m["month"] in covered]
     result = Forecast()
 
+    gap = analytics.coverage_gap(conn)
+    if gap:
+        result.warnings.append(gap)
     if len(complete) < MIN_HISTORY_MONTHS:
         result.warnings.append(
-            f"Only {len(complete)} complete month(s) of history. A forecast needs at least "
-            f"{MIN_HISTORY_MONTHS}, so there is nothing honest to show yet."
+            f"Only {len(complete)} fully-imported month(s) of history. A forecast needs at "
+            f"least {MIN_HISTORY_MONTHS}, so there is nothing honest to show yet."
         )
         return result
 
     used = complete[-6:]
-    window = [m["month"] for m in used]
     this_ym = date.today().strftime("%Y-%m")
     behind = (int(this_ym[:4]) * 12 + int(this_ym[5:])) - (
         int(used[-1]["month"][:4]) * 12 + int(used[-1]["month"][5:]))
@@ -488,7 +489,7 @@ def forecast(conn: sqlite3.Connection, ahead: int = FORECAST_MONTHS) -> Forecast
     saved = round(sum(m["saved"] for m in used) / len(used), 2)
     centre = result.monthly_income - result.fixed - result.variable_typical - saved
 
-    ym = this_month
+    ym = date.today().strftime("%Y-%m")
     for _ in range(max(int(ahead or 1), 1)):
         ym = analytics._shift_month(ym, 1)
         result.months.append({
@@ -529,21 +530,27 @@ def forecast(conn: sqlite3.Connection, ahead: int = FORECAST_MONTHS) -> Forecast
 
 def all_insights(conn: sqlite3.Connection, limit: Optional[int] = None) -> list[Insight]:
     """Every detector, ranked: most serious first, then by the money involved."""
-    totals = analytics.monthly_totals(conn)
-    # The month in progress is not a month. Including it made `recent` a
-    # part-month the moment a single September row landed, at which point every
-    # merchant "stopped charging" and August's real findings stopped being
-    # checked at all. One payroll deposit was enough to do it.
-    this_month = date.today().strftime("%Y-%m")
-    totals = [m for m in totals if m["month"] < this_month]
-    months = [m["month"] for m in totals]
+    # Only months whose statements are all in. Two ways this used to go wrong,
+    # and they compound: the calendar month in progress counted as a month the
+    # moment one row landed in it, and a month counted as finished even when
+    # the statements covering it were not. On eight months of real data the
+    # second one produced ten findings saying merchants had "stopped charging"
+    # in a month that was half imported.
+    # Two windows, because two kinds of finding tolerate a partial month
+    # differently. A total barely moves over four missing days; a subscription
+    # that bills on the 30th looks cancelled after one.
+    settled = analytics.complete_months(conn, analytics.SETTLED_TOLERANCE_DAYS)
+    strict = analytics.complete_months(conn, analytics.STRICT_TOLERANCE_DAYS)
+    covered = set(settled)
+    totals = [m for m in analytics.monthly_totals(conn) if m["month"] in covered]
+    months = settled
     if len(months) < MIN_HISTORY_MONTHS:
         return []
 
     found = (
         possible_duplicates(conn, months)
-        + price_changes(conn, months)
-        + recurring_started_or_stopped(conn, months)
+        + price_changes(conn, strict)
+        + recurring_started_or_stopped(conn, strict)
         + category_spikes(conn, months)
         + unusual_charges(conn, months)
         + fixed_cost_pressure(conn, totals)

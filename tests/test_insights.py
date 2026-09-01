@@ -23,7 +23,23 @@ def tx(conn, day, desc, amount, sign=-1, i=[0]):
     conn.commit()
 
 
-def finish(conn):
+def close_months(conn, months=MONTHS):
+    """Put a charge on the last day of each month.
+
+    Without this the fixture's newest month is only covered to the day of its
+    last transaction, and the app -- correctly -- refuses to treat a
+    half-covered month as finished. Real statements run to the end of a period;
+    the fixtures have to as well or they are testing a shape that does not occur.
+    """
+    import calendar
+
+    for m in months:
+        last = calendar.monthrange(int(m[:4]), int(m[5:7]))[1]
+        tx(conn, f"{m}-{last:02d}", "TTC FARE", 3.35)
+
+
+def finish(conn, months=MONTHS):
+    close_months(conn, months)
     categorize_all(conn)
     coverage.match_internal_transfers(conn)
 
@@ -40,7 +56,7 @@ def kinds(found):
 def test_nothing_is_reported_without_enough_history(tmp_path):
     conn = setup(tmp_path)
     tx(conn, "2026-06-01", "NETFLIX.COM", 20.99)
-    finish(conn)
+    finish(conn, ["2026-06"])
     assert insights.all_insights(conn) == []
 
 
@@ -136,7 +152,7 @@ def test_every_insight_carries_its_arithmetic(tmp_path):
 def test_a_forecast_needs_history(tmp_path):
     conn = setup(tmp_path)
     tx(conn, "2026-06-01", "PAYROLL", 5000, sign=1)
-    finish(conn)
+    finish(conn, ["2026-06"])
     f = insights.forecast(conn)
     assert f.ok is False
     assert f.months == []
@@ -161,10 +177,11 @@ def test_a_forecast_shows_a_range_not_just_a_number(tmp_path):
 def test_a_stale_forecast_says_so(tmp_path):
     """History that stops months ago must not be projected forward silently."""
     conn = setup(tmp_path)
-    for m in ["2025-01", "2025-02", "2025-03", "2025-04"]:
+    window = ["2025-01", "2025-02", "2025-03", "2025-04"]
+    for m in window:
         tx(conn, f"{m}-01", "PAYROLL DEPOSIT POLYAI", 5000, sign=1)
         tx(conn, f"{m}-07", "NETFLIX.COM", 20.99)
-    finish(conn)
+    finish(conn, window)
     f = insights.forecast(conn)
     assert any("months back" in w for w in f.warnings)
 
@@ -196,3 +213,67 @@ def test_a_genuinely_consecutive_run_that_stops_is_still_found(tmp_path):
     steady(conn, "CRAVE TV", 19.99, MONTHS[:-1], day="22")
     finish(conn)
     assert ("recurring_stopped", "CRAVE TV") in kinds(insights.all_insights(conn))
+
+
+# ------------------------------------------------- statement coverage --------
+
+def test_a_half_imported_month_does_not_cancel_every_subscription(tmp_path):
+    """The bug this window exists for.
+
+    On eight months of real statements, one account reaching only the 27th of
+    the newest month produced ten findings announcing that Netflix, the phone
+    bill, the internet and the gym had all stopped charging. They had not; the
+    statements had.
+    """
+    conn = setup(tmp_path)
+    import calendar
+    for m in MONTHS:
+        last = calendar.monthrange(int(m[:4]), int(m[5:7]))[1]
+        tx(conn, f"{m}-05", "NETFLIX.COM", 20.99)
+        tx(conn, f"{m}-06", "FIDO MOBILE", 45.20)
+        tx(conn, f"{m}-{last:02d}", "TTC FARE", 3.35)
+    # A second account whose statements stop mid-month, as a real one does.
+    db.get_or_create_account(conn, "Chequing", "simplii", "chequing")
+    for m in MONTHS[:-1]:
+        conn.execute(
+            "INSERT INTO transactions(account_id,date,description,raw_description,amount,fingerprint)"
+            " VALUES (2,?,?,?,?,?)", (f"{m}-15", "PAYROLL", "PAYROLL", 4000.0, f"c{m}"))
+    conn.execute(
+        "INSERT INTO transactions(account_id,date,description,raw_description,amount,fingerprint)"
+        " VALUES (2,?,?,?,?,?)", (f"{MONTHS[-1]}-12", "PAYROLL", "PAYROLL", 4000.0, "clast"))
+    conn.commit()
+    categorize_all(conn)
+    coverage.match_internal_transfers(conn)
+
+    found = kinds(insights.all_insights(conn))
+    assert ("recurring_stopped", "NETFLIX.COM") not in found
+    assert ("recurring_stopped", "FIDO MOBILE") not in found
+
+
+def test_the_lagging_account_is_named_rather_than_left_a_mystery(tmp_path):
+    conn = setup(tmp_path)
+    import calendar
+    for m in MONTHS:
+        last = calendar.monthrange(int(m[:4]), int(m[5:7]))[1]
+        tx(conn, f"{m}-{last:02d}", "NETFLIX.COM", 20.99)
+    db.get_or_create_account(conn, "Simplii Chequing", "simplii", "chequing")
+    for m in MONTHS:
+        conn.execute(
+            "INSERT INTO transactions(account_id,date,description,raw_description,amount,fingerprint)"
+            " VALUES (2,?,?,?,?,?)", (f"{m}-10", "PAYROLL", "PAYROLL", 4000.0, f"c{m}"))
+    conn.commit()
+    categorize_all(conn)
+    note = insights.analytics.coverage_gap(conn)
+    assert note and "Simplii Chequing" in note
+
+
+def test_the_two_windows_differ_only_when_the_tail_is_missing(tmp_path):
+    conn = setup(tmp_path)
+    import calendar
+    for m in MONTHS:
+        last = calendar.monthrange(int(m[:4]), int(m[5:7]))[1]
+        tx(conn, f"{m}-{last:02d}", "NETFLIX.COM", 20.99)
+    categorize_all(conn)
+    a = insights.analytics
+    assert a.complete_months(conn, a.STRICT_TOLERANCE_DAYS) == \
+           a.complete_months(conn, a.SETTLED_TOLERANCE_DAYS)

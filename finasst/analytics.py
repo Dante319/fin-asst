@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from . import income
@@ -68,6 +68,112 @@ def months_available(conn: sqlite3.Connection) -> list[str]:
         "SELECT DISTINCT substr(date, 1, 7) AS ym FROM transactions ORDER BY ym DESC"
     ).fetchall()
     return [r["ym"] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Statement coverage
+# ---------------------------------------------------------------------------
+# A month is not finished because the calendar says so. It is finished when the
+# statements covering it are all in. Get this wrong and every merchant on the
+# account you have not imported yet appears to have stopped charging you.
+
+DORMANT_DAYS = 75          # past this, an account is treated as closed, not late
+
+
+def _last_day(ym: str) -> str:
+    year, month = int(ym[:4]), int(ym[5:7])
+    if month == 12:
+        return f"{year}-12-31"
+    first_of_next = date(year, month + 1, 1)
+    return (first_of_next - timedelta(days=1)).isoformat()
+
+
+def account_coverage(conn: sqlite3.Connection) -> list[dict]:
+    """How far each account's statements actually reach."""
+    return [
+        {"account": r["name"], "first": r["f"], "last": r["l"], "count": int(r["n"])}
+        for r in conn.execute(
+            """SELECT a.name, MIN(t.date) f, MAX(t.date) l, COUNT(*) n
+               FROM transactions t JOIN accounts a ON a.id = t.account_id
+               GROUP BY a.name ORDER BY a.name""")
+    ]
+
+
+def coverage_end(conn: sqlite3.Connection, dormant_days: int = DORMANT_DAYS) -> Optional[str]:
+    """The last date EVERY still-active account has statements up to.
+
+    The weakest account sets the limit, because a month is only whole when
+    every account that was in use during it has been imported. An account that
+    has been silent for `dormant_days` past the newest data is treated as
+    closed rather than late -- otherwise one card you stopped using would hold
+    the whole app back for good.
+    """
+    accounts = account_coverage(conn)
+    if not accounts:
+        return None
+    newest = max(a["last"] for a in accounts)
+    cutoff = (date.fromisoformat(newest) - timedelta(days=dormant_days)).isoformat()
+    active = [a for a in accounts if a["last"] >= cutoff]
+    return min(a["last"] for a in active) if active else newest
+
+
+# How much of a month's tail may be missing before it stops being usable.
+# Two answers, because two kinds of question have different sensitivity:
+#
+#   0 days  -- "did this merchant stop charging me?" and "did this bill change
+#              price?" A single missing day at the end of the month is enough
+#              to make a subscription that bills on the 30th look cancelled.
+#   5 days  -- totals, category comparisons and the forecast. Four missing days
+#              out of thirty-one moves a monthly total by a few percent; throwing
+#              the whole month away to avoid that loses far more than it saves.
+STRICT_TOLERANCE_DAYS = 0
+SETTLED_TOLERANCE_DAYS = 5
+
+
+def complete_months(conn: sqlite3.Connection, tolerance_days: int = STRICT_TOLERANCE_DAYS) -> list[str]:
+    """Months whose statements are in, oldest first.
+
+    This is the window detectors and the forecast work in. The calendar month
+    in progress is excluded automatically: its last day is in the future, so no
+    statement reaches it.
+
+    `tolerance_days` is how much of the month's tail may be missing. Pass 0 when
+    a gap at the end of the month could invent a finding; see the constants
+    above for which questions need which.
+    """
+    end = coverage_end(conn)
+    if end is None:
+        return []
+    limit = (date.fromisoformat(end) + timedelta(days=max(int(tolerance_days), 0))).isoformat()
+    return sorted(m for m in months_available(conn) if _last_day(m) <= limit)
+
+
+def coverage_gap(conn: sqlite3.Connection) -> Optional[str]:
+    """A sentence naming the account that is holding the window back."""
+    accounts = account_coverage(conn)
+    if len(accounts) < 2:
+        return None
+    end = coverage_end(conn)
+    newest = max(a["last"] for a in accounts)
+    if end is None or end >= newest:
+        return None
+    behind = sorted(a for a in accounts if a["last"] == end)
+    names = ", ".join(a["account"] for a in behind)
+    settled = complete_months(conn, SETTLED_TOLERANCE_DAYS)
+    strict = complete_months(conn, STRICT_TOLERANCE_DAYS)
+    last_settled = settled[-1] if settled else "nothing"
+    note = (
+        f"{names} only reaches {end}, while your other accounts reach {newest}. "
+        f"Figures below stop at {last_settled} rather than reporting a half-imported "
+        "month as one where your spending suddenly fell."
+    )
+    if strict and settled and strict[-1] != settled[-1]:
+        note += (
+            f" Findings about a merchant starting or stopping stop a month earlier "
+            f"({strict[-1]}), because a few missing days at the end of a month are "
+            "enough to make a subscription look cancelled."
+        )
+    return note
 
 
 def monthly_totals(conn: sqlite3.Connection) -> list[dict]:
