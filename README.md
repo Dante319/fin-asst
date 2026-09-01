@@ -181,6 +181,10 @@ finasst categorize [--recategorize]
 finasst review                     what no rule matched
 finasst set ID "Category"          fix one, and teach the merchant
 finasst summary [--month] [--months N]
+finasst insights [--limit N]       findings the app can defend, most serious first
+finasst forecast [--months N]      the next few months, with the range that matters
+finasst rules [--explain "TEXT"]   the rules that do the filing, and which one wins
+finasst suggest [--list] [--accept KEY]   optional model: propose rules for the backlog
 finasst coverage [--since YYYY-MM-DD]
 finasst fx list | set ID --received N | rates | report
 finasst goal add NAME --amount N --date YYYY-MM-DD [--priority N] [--monthly-min N]
@@ -189,6 +193,42 @@ finasst project [--surplus N]
 finasst whatif --without "Goal name"
 finasst serve
 ```
+
+## Findings, and the forecast
+
+`finasst insights` (or the Insights page) runs a set of detectors over your own
+history. Each finding carries the arithmetic it came from and a link to the
+transactions behind it, because a finance app telling you something surprising
+has to be able to prove it -- otherwise the sensible response to a surprising
+claim is to distrust the app, and then the good findings go unread too.
+
+What it looks for: the same amount charged twice days apart; a bill that has
+changed price; something that has started or stopped billing you monthly; a
+charge far outside what that merchant normally costs; a category well above its
+own median; and how much of your income is committed before you decide anything.
+
+Every detector stays silent below three months of history, and a category spike
+caused entirely by one strange charge is reported once, not twice.
+
+The forecast is built from three separately-sourced numbers rather than one
+trend line, because they behave differently: **fixed** (merchants billing a
+steady amount every month), **variable** (everything else, as a median with your
+cheapest and dearest month carried through as a range), and **income** (your
+declared pay if you have entered one, otherwise the average of complete months).
+The range is the point. A forecast quoted as a single number invites you to
+treat it as a promise.
+
+## Rules
+
+Every categorised transaction got its category because one rule matched it, and
+`finasst rules --explain "LOBLAWS #1032 TORONTO ON"` will tell you which, and
+what it beat. The Rules page lists every rule with how many transactions it
+actually *decides* -- not how many it matches, since a rule that always loses to
+a higher-ranked one is doing nothing for you.
+
+Rules you teach outrank the built-in ones. Built-in rules live in the code
+rather than the database, so they cannot be edited from the app: the next start
+would silently undo it. Add your own for the same merchant instead.
 
 ## How the projection works
 
@@ -243,8 +283,24 @@ uv run pytest
 
 - **Bank auto-sync.** Every option costs money at any real volume or hands a
   third party your banking credentials.
-- **LLM categorisation inside the app.** It would make the numbers
-  irreproducible and put transaction data on someone else's server. Point Claude
-  at the database when you want analysis; the app itself stays deterministic.
+- **A model anywhere near a number.** There is an optional language model, and
+  it has exactly two jobs, both at the edges. It can **propose rules** for
+  merchants nothing matched -- it never writes a category onto a transaction;
+  you accept a proposal, and what you get is an ordinary user rule, visible on
+  the Rules page, applied by the same deterministic matcher as everything else.
+  Run the same import twice and you get the same answer whether or not a model
+  is configured. And it can **narrate findings that were already computed**,
+  handed finished sentences with every number pre-formatted as text, so it has
+  nothing to calculate and nothing to get wrong. It is off by default, and
+  nothing else in the app needs it.
+
+  Kept cheap by construction: merchants are deduplicated (200 uncategorised
+  transactions are usually 20 merchants), cached forever so a merchant is sent
+  at most once in the lifetime of the database, batched into one request,
+  capped per run, and only ever triggered by you pressing the button. The
+  reference backend is Ollama on localhost, which is free and sends nothing off
+  the machine; any OpenAI-compatible endpoint works instead via
+  `FINASST_LLM_URL`. An API key is read from `FINASST_LLM_KEY` in the
+  environment, never written to the database.
 - **Multi-user or hosted deployment.** There is no auth because there is nothing
   to authenticate. Do not expose this to a network.

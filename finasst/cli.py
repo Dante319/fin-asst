@@ -22,7 +22,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from . import analytics, config, coverage, db, destinations, income, remittance
+from . import (analytics, config, coverage, db, destinations, income, insights,
+               llm, remittance, rules)
 from .categorize import categorize_all, seed_rules, set_manual_category
 from .goals import Goal, add_goal, compare, load_goals, project
 from .importers import import_file
@@ -538,6 +539,106 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_insights(args) -> int:
+    conn = _conn()
+    found = insights.all_insights(conn, limit=args.limit)
+    if not found:
+        print("Nothing to report. Every detector refuses to fire on fewer than "
+              f"{insights.MIN_HISTORY_MONTHS} months rather than dress up noise as a finding.")
+        return 0
+    label = {"flag": "!", "notable": "*", "watch": " "}
+    for f in found:
+        print(f"{label.get(f.severity, ' ')} {f.headline}")
+        print(f"    {f.detail}")
+        print(f"    basis: {f.basis}\n")
+    return 0
+
+
+def cmd_forecast(args) -> int:
+    conn = _conn()
+    f = insights.forecast(conn, ahead=args.months)
+    for w in f.warnings:
+        print(f"  ! {w}\n")
+    if not f.ok:
+        return 1
+    print(f.basis + "\n")
+    print(f"{'Month':<10}{'Surplus':>12}{'Worst':>12}{'Best':>12}")
+    print("-" * 46)
+    for m in f.months:
+        print(f"{m['month']:<10}{_money(m['surplus']):>12}"
+              f"{_money(m['worst']):>12}{_money(m['best']):>12}")
+    print("\nThe range is the point: a forecast quoted as one number invites you "
+          "to treat it as a promise.")
+    return 0
+
+
+def cmd_rules(args) -> int:
+    conn = _conn()
+    if args.explain:
+        result = rules.explain(conn, args.explain)
+        if result.winner is None:
+            print(f"No rule matches {args.explain!r}. A transaction like this stays uncategorised.")
+            return 0
+        w = result.winner
+        print(f"{args.explain}  ->  {result.category}")
+        print(f"  decided by {w.pattern!r} ({w.match_type}, priority {w.priority}, "
+              f"{'yours' if w.is_user else 'built in'})")
+        for other in result.also_matched:
+            print(f"  also matched {other.pattern!r} -> {other.category} (priority {other.priority})")
+        return 0
+
+    everything = rules.inventory(conn)
+    mine = sorted((r for r in everything if r.is_user), key=lambda r: -r.matches)
+    builtin = [r for r in everything if not r.is_user]
+    print(f"{len(mine)} rules you taught, {len(builtin)} built in "
+          f"({sum(1 for r in builtin if r.matches == 0)} matching nothing right now).\n")
+    if mine:
+        print(f"{'Pattern':<30}{'Category':<24}{'Files':>7}")
+        print("-" * 61)
+        for r in mine:
+            note = f"   (never wins; {r.shadowed_by!r} matches first)" if r.shadowed_by else ""
+            print(f"{r.pattern[:29]:<30}{r.category:<24}{r.matches:>7}{note}")
+    else:
+        print("Nothing taught yet. `finasst set <id> \"<Category>\"` teaches one.")
+    return 0
+
+
+def cmd_suggest(args) -> int:
+    """Ask the optional model about merchants no rule matched."""
+    conn = _conn()
+    state = llm.status(conn)
+    if not state["enabled"]:
+        print("No model configured, and nothing else in this app needs one.")
+        print("Free option: install Ollama, `ollama pull llama3.2:3b`, then set")
+        print("  FINASST_LLM_URL=http://127.0.0.1:11434/v1/chat/completions")
+        return 1
+    if args.list:
+        for s in llm.suggestions(conn):
+            print(f"  {s.merchant_key:<28} -> {s.category or '(declined)':<22} "
+                  f"{s.confidence:<7} {s.transactions} tx")
+        return 0
+    if args.accept:
+        chosen = llm.accept(conn, args.accept)
+        stats = rules.recategorise(conn)
+        print(f"Added a rule: {args.accept!r} is {chosen}. "
+              f"{stats['unmatched']} transactions still need a look.")
+        return 0
+    try:
+        made = llm.suggest_categories(conn)
+    except llm.LLMError as exc:
+        print(f"  ! {exc}")
+        return 1
+    if not made:
+        print("Nothing to ask about: every uncategorised merchant has been sent before.")
+        return 0
+    print(f"Asked about {len(made)} merchants in one request "
+          f"(using {state['model']} {state['where']}).\n")
+    for s in made:
+        print(f"  {s.example[:40]:<42} -> {s.category or '(declined to guess)':<22} {s.confidence}")
+    print("\nNothing has been applied. Accept one with:  finasst suggest --accept \"<key>\"")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="finasst", description="Local-first personal finance assistant")
     sub = p.add_subparsers(dest="command", required=True)
@@ -653,6 +754,24 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--surplus-delta", type=float, default=0.0)
     wi.add_argument("--surplus", type=float)
     wi.set_defaults(func=cmd_whatif)
+
+    ins = sub.add_parser("insights", help="findings the app can defend, most serious first")
+    ins.add_argument("--limit", type=int, default=None)
+    ins.set_defaults(func=cmd_insights)
+
+    fc = sub.add_parser("forecast", help="the next few months, with the range that matters")
+    fc.add_argument("--months", type=int, default=insights.FORECAST_MONTHS)
+    fc.set_defaults(func=cmd_forecast)
+
+    rl = sub.add_parser("rules", help="the rules that do the categorising")
+    rl.add_argument("--explain", metavar="DESCRIPTION",
+                    help="show which rule decides this merchant string, and what it beat")
+    rl.set_defaults(func=cmd_rules)
+
+    sg = sub.add_parser("suggest", help="ask the optional model about merchants no rule matched")
+    sg.add_argument("--list", action="store_true", help="show proposals already cached")
+    sg.add_argument("--accept", metavar="KEY", help="turn one proposal into a rule")
+    sg.set_defaults(func=cmd_suggest)
 
     sv = sub.add_parser("serve", help="run the local web app")
     sv.add_argument("--host", default="127.0.0.1")

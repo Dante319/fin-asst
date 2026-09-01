@@ -21,7 +21,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import analytics, config, coverage, db, destinations, income, remittance, rules
+from .. import (analytics, config, coverage, db, destinations, income, insights,
+                llm, remittance, rules)
 from . import charts
 from ..categorize import categorize_all, seed_rules, set_manual_category
 from ..goals import Goal, add_goal, compare, load_goals, project
@@ -201,6 +202,7 @@ def dashboard(request: Request, month: Optional[str] = None, months: int = 1,
         "surplus_basis": basis,
         "surplus_warning": warning,
         "uncategorised_count": analytics.uncategorised_count(conn),
+        "top_insights": insights.all_insights(conn, limit=3),
     })
 
 
@@ -684,6 +686,92 @@ def remove_regime(regime_id: int, conn=Depends(get_conn)):
 
 
 # --------------------------------------------------------------------------
+# Insights
+# --------------------------------------------------------------------------
+
+@app.get("/insights", response_class=HTMLResponse)
+def insights_page(request: Request, conn=Depends(get_conn)):
+    found = insights.all_insights(conn)
+    return templates.TemplateResponse(request, "insights.html", {
+        "page": "insights",
+        "insights": found,
+        "by_severity": {
+            level: [i for i in found if i.severity == level]
+            for level in ("flag", "notable", "watch")
+        },
+        "forecast": insights.forecast(conn),
+        "llm": llm.status(conn),
+        "suggestions": llm.suggestions(conn),
+        "summary": db.get_setting(conn, "llm_last_summary", ""),
+        "notice": request.query_params.get("notice"),
+        "error": request.query_params.get("error"),
+    })
+
+
+@app.post("/insights/suggest")
+def run_suggestions(conn=Depends(get_conn)):
+    """Ask the model about merchants no rule matched. One request, deduplicated."""
+    try:
+        made = llm.suggest_categories(conn)
+    except llm.LLMError as exc:
+        return RedirectResponse(f"/insights?error={exc}", status_code=303)
+    labelled = [s for s in made if s.category]
+    return RedirectResponse(
+        f"/insights?notice=Asked about {len(made)} merchants in one request; "
+        f"{len(labelled)} came back with a category. Nothing has been applied — "
+        "accept the ones you agree with.",
+        status_code=303,
+    )
+
+
+@app.post("/insights/suggest/{merchant_key}/accept")
+def accept_suggestion(merchant_key: str, category: str = Form(""), conn=Depends(get_conn)):
+    try:
+        chosen = llm.accept(conn, merchant_key, category or None)
+    except (llm.LLMError, rules.RuleError) as exc:
+        return RedirectResponse(f"/insights?error={exc}", status_code=303)
+    stats = rules.recategorise(conn)
+    return RedirectResponse(
+        f"/insights?notice=Added a rule: “{merchant_key}” is {chosen}. "
+        f"{stats['unmatched']} transactions still need a look.",
+        status_code=303,
+    )
+
+
+@app.post("/insights/suggest/{merchant_key}/reject")
+def reject_suggestion(merchant_key: str, conn=Depends(get_conn)):
+    llm.reject(conn, merchant_key)
+    return RedirectResponse(
+        f"/insights?notice=Rejected “{merchant_key}”. It will not be sent again.",
+        status_code=303,
+    )
+
+
+@app.post("/insights/narrate")
+def narrate_insights(conn=Depends(get_conn)):
+    found = insights.all_insights(conn)
+    try:
+        text = llm.narrate(conn, found, insights.forecast(conn).basis)
+    except llm.LLMError as exc:
+        return RedirectResponse(f"/insights?error={exc}", status_code=303)
+    db.set_setting(conn, "llm_last_summary", text)
+    return RedirectResponse("/insights", status_code=303)
+
+
+@app.post("/insights/llm-settings")
+def save_llm_settings(
+    llm_url: str = Form(""),
+    llm_model: str = Form(""),
+    llm_enabled: bool = Form(False),
+    conn=Depends(get_conn),
+):
+    db.set_setting(conn, "llm_url", llm_url.strip())
+    db.set_setting(conn, "llm_model", llm_model.strip())
+    db.set_setting(conn, "llm_enabled", "1" if llm_enabled else "")
+    return RedirectResponse("/insights?notice=Saved.", status_code=303)
+
+
+# --------------------------------------------------------------------------
 # Rules
 # --------------------------------------------------------------------------
 
@@ -701,6 +789,7 @@ def rules_page(request: Request, test: str = "", conn=Depends(get_conn)):
         "test": test,
         "explanation": rules.explain(conn, test) if test.strip() else None,
         "uncategorised_count": analytics.uncategorised_count(conn),
+        "top_insights": insights.all_insights(conn, limit=3),
         "notice": request.query_params.get("notice"),
     })
 

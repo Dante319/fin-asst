@@ -109,3 +109,16 @@ def test_an_import_can_be_undone(client):
     resp = client.post("/import/undo", data={"source_file": "oops.csv"}, follow_redirects=False)
     assert resp.status_code == 303
     assert "ZORBLAX CAFE" not in client.get("/transactions?q=ZORBLAX").text
+
+
+def test_the_insights_page_renders_without_a_model_configured(client):
+    """Everything deterministic must work with no model anywhere near it."""
+    resp = client.get("/insights")
+    assert resp.status_code == 200
+    assert "No model configured" in resp.text
+
+
+def test_asking_a_model_that_is_not_there_fails_in_words(client):
+    resp = client.post("/insights/suggest", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]

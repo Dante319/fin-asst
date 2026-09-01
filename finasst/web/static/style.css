@@ -581,3 +581,43 @@ tr.flash td { animation: flash 1.3s ease-out; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
 tr.muted code, tr.muted td { color: var(--text-muted); }
 .topbar nav { row-gap: 4px; }
+
+/* ---- insights ---- */
+.findings { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.finding {
+  border: 1px solid var(--border); border-left: 4px solid var(--text-muted);
+  border-radius: var(--radius-sm); padding: 14px 16px; background: var(--surface-1);
+  transition: border-color 0.18s, transform 0.18s;
+}
+.finding:hover { transform: translateX(2px); border-color: var(--border-strong); }
+.finding.sev-flag    { border-left-color: var(--bad); }
+.finding.sev-notable { border-left-color: var(--warning); }
+.finding.sev-watch   { border-left-color: var(--series-1); }
+.finding-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+.finding h3 {
+  font-size: 15px; font-weight: 700; margin: 0 0 5px; color: var(--text-primary);
+  text-transform: none; letter-spacing: -0.01em;
+}
+.finding .amount { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.finding p { margin: 0 0 7px; font-size: 13.5px; color: var(--text-secondary); }
+.finding .basis {
+  font-size: 12px; color: var(--text-muted); margin: 0;
+  padding-top: 8px; border-top: 1px dashed var(--border);
+}
+.finding .kind {
+  display: inline-block; margin-right: 8px; padding: 1px 7px; border-radius: 5px;
+  background: var(--surface-2); font-size: 10.5px; font-weight: 650;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary);
+}
+.finding-strip { display: flex; flex-direction: column; gap: 9px; }
+.finding-strip a {
+  display: flex; justify-content: space-between; gap: 14px; align-items: baseline;
+  text-decoration: none; color: inherit; padding: 10px 12px;
+  border-radius: var(--radius-sm); background: var(--surface-2);
+  border-left: 3px solid var(--text-muted); transition: transform 0.16s;
+}
+.finding-strip a:hover { transform: translateX(3px); }
+.finding-strip a.sev-flag    { border-left-color: var(--bad); }
+.finding-strip a.sev-notable { border-left-color: var(--warning); }
+.finding-strip a.sev-watch   { border-left-color: var(--series-1); }
+.finding-strip .t { font-weight: 600; font-size: 13.5px; }

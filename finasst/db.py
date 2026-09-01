@@ -123,6 +123,21 @@ CREATE INDEX IF NOT EXISTS idx_regime_start ON income_regimes(started_on);
 
 -- Cached reference rates. Populated only by an explicit `finasst fx sync`;
 -- nothing in this app reaches the network on its own.
+-- Cached category proposals from an optional language model. One row per
+-- MERCHANT, not per transaction, and kept forever: a merchant is sent to a
+-- model at most once in the lifetime of this database, whether or not the
+-- proposal was accepted. Accepting one writes an ordinary user rule; nothing
+-- here ever writes a category onto a transaction.
+CREATE TABLE IF NOT EXISTS llm_suggestions (
+    merchant_key TEXT PRIMARY KEY,
+    example      TEXT NOT NULL,          -- the description it was derived from
+    category     TEXT,                   -- NULL = the model declined to guess
+    confidence   TEXT NOT NULL DEFAULT 'low',
+    model        TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'proposed',  -- proposed | accepted | rejected
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS fx_rates (
     date   TEXT NOT NULL,
     base   TEXT NOT NULL,

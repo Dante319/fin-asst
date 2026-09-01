@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>What the numbers are <span class="accent">trying to tell you</span></h1>
+    <p>Every finding below is arithmetic over transactions you can go and read.
+       Each one shows the sum it came from.</p>
+  </div>
+</div>
+
+{% if notice %}<p class="notice info"><span class="ico">&#10003;</span><span>{{ notice }}</span></p>{% endif %}
+{% if error %}<p class="notice bad"><span class="ico">&#9888;</span><span>{{ error }}</span></p>{% endif %}
+
+{% if summary %}
+  <section class="panel accent-cool">
+    <h2>In a sentence</h2>
+    <p class="caption" style="margin-bottom:8px">Written by the model you configured,
+       from the findings below. It was given the sentences, not the numbers &mdash;
+       it has nothing to calculate and nothing to get wrong.</p>
+    <p style="font-size:15.5px; line-height:1.65; margin:0">{{ summary }}</p>
+  </section>
+{% endif %}
+
+<!-- ---------------------------------------------------------------- forecast -->
+<section class="panel accent-cool">
+  <h2>The next {{ forecast.months | length or 3 }} months, if nothing changes</h2>
+  {% if forecast.ok %}
+    <p class="caption">{{ forecast.basis }}.</p>
+    {% for w in forecast.warnings %}
+      <p class="notice warn"><span class="ico">&#9888;</span><span>{{ w }}</span></p>
+    {% endfor %}
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Month</th><th class="num">Income</th><th class="num">Fixed</th>
+                   <th class="num">Variable</th><th class="num">Into savings</th>
+                   <th class="num">Surplus</th><th>Range</th></tr></thead>
+        <tbody>
+        {% for m in forecast.months %}
+          <tr>
+            <td class="date">{{ m.month }}</td>
+            <td class="num">{{ m.income | money }}</td>
+            <td class="num">{{ m.fixed | money }}</td>
+            <td class="num">{{ m.variable | money }}</td>
+            <td class="num">{{ m.saved | money }}</td>
+            <td class="num {{ 'negative' if m.surplus < 0 }}"><strong>{{ m.surplus | money }}</strong></td>
+            <td class="muted small">{{ m.worst | money }} to {{ m.best | money }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="caption" style="margin:14px 0 0">
+      The range is the point. Your cheapest month and your dearest month, carried
+      forward &mdash; a forecast quoted as one number invites you to treat it as a promise.
+    </p>
+  {% else %}
+    {% for w in forecast.warnings %}
+      <p class="notice warn"><span class="ico">&#9888;</span><span>{{ w }}</span></p>
+    {% endfor %}
+  {% endif %}
+</section>
+
+<!-- ---------------------------------------------------------------- findings -->
+{% if insights %}
+  {% for level, label, css in [('flag', 'Worth checking now', 'accent-flag'),
+                               ('notable', 'Changes since last month', 'accent-warm'),
+                               ('watch', 'Worth knowing', 'plain')] %}
+    {% if by_severity[level] %}
+      <section class="panel {{ css }}">
+        <h2>{{ label }}</h2>
+        <div class="findings">
+          {% for i in by_severity[level] %}
+            <article class="finding sev-{{ i.severity }}">
+              <div class="finding-head">
+                <h3>{{ i.headline }}</h3>
+                <span class="amount {{ 'negative' if i.amount > 0 and i.kind != 'recurring_stopped' }}">
+                  {{ i.amount | abs | money }}</span>
+              </div>
+              <p>{{ i.detail }}</p>
+              <p class="basis"><span class="kind">{{ i.kind.replace('_', ' ') }}</span>
+                {{ i.basis }}
+                {% if i.link %}&middot; <a href="{{ i.link }}">see the transactions</a>{% endif %}
+              </p>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+  {% endfor %}
+{% else %}
+  <section class="panel plain">
+    <h2>Nothing to report</h2>
+    <p class="caption" style="margin-bottom:0">Either your spending has been steady, or
+       there is not yet enough history &mdash; every detector here refuses to fire on
+       fewer than three months rather than dress up noise as a finding.</p>
+  </section>
+{% endif %}
+
+<!-- --------------------------------------------------------------------- llm -->
+<section class="panel">
+  <div class="panel-head">
+    <h2>The optional model</h2>
+    {% if llm.enabled %}
+      <form method="post" action="/insights/narrate" class="inline-form">
+        <button type="submit" class="ghost">Summarise the findings</button>
+      </form>
+    {% endif %}
+  </div>
+  <p class="caption">
+    A model is never allowed near a number. It gets two jobs, both at the edges:
+    propose rules for merchants nothing matched, and put already-computed findings
+    into a paragraph. Accepting a proposal writes an ordinary rule you can see on
+    <a href="/rules">the rules page</a> &mdash; after that the model is out of the loop
+    and the same deterministic matcher does the work.
+  </p>
+
+  {% if llm.enabled %}
+    <p class="caption">
+      Using <code>{{ llm.model }}</code> {{ llm.where }}.
+      {{ llm.cached }} merchants asked about so far ({{ llm.accepted }} accepted,
+      {{ llm.rejected }} rejected). {{ llm.pending }} uncategorised merchants have
+      never been sent.
+      {% if not llm.is_local %}
+        <strong>This endpoint is not on your machine</strong>, so merchant names
+        leave it. Amounts, dates and balances never do.
+      {% endif %}
+    </p>
+
+    <form method="post" action="/insights/suggest" class="inline-form" style="margin-bottom:18px">
+      <button type="submit" {{ 'disabled' if not llm.pending }}>
+        Ask about {{ llm.pending }} merchant{{ '' if llm.pending == 1 else 's' }}</button>
+      <span class="hint">One request for all of them. Each merchant is sent at most
+        once, ever &mdash; the answer is cached whether you accept it or not.</span>
+    </form>
+
+    {% if suggestions %}
+      <h3>Proposed rules</h3>
+      <div class="table-scroll">
+        <table class="tight">
+          <thead><tr><th>Merchant</th><th>Suggested</th><th>Confidence</th>
+                     <th class="num">Affects</th><th></th></tr></thead>
+          <tbody>
+          {% for s in suggestions %}
+            <tr>
+              <td><strong>{{ s.example }}</strong>
+                  <div class="note">rule would be <code>{{ s.merchant_key }}</code></div></td>
+              <td>
+                {% if s.category %}
+                  <span class="gdot {{ s.category | groupof | groupclass }}"></span>{{ s.category }}
+                {% else %}<span class="muted">declined to guess</span>{% endif %}
+              </td>
+              <td><span class="verdict {{ 'good' if s.confidence == 'high' else 'neutral' }}">{{ s.confidence }}</span></td>
+              <td class="num muted">{{ s.transactions }} tx</td>
+              <td style="white-space:nowrap">
+                <form method="post" action="/insights/suggest/{{ s.merchant_key }}/accept" class="inline-form">
+                  <select name="category" aria-label="Category">
+                    {% for c in ['Groceries','Eats & Drinks','Transport','Housing','Utilities',
+                                 'Phone & Internet','Health','Personal Care','Insurance','Shopping',
+                                 'Subscriptions','Travel','Entertainment','Remittance',
+                                 'Fees & Interest','Debt Payment','Income','Transfer',
+                                 'Savings & Investments','Other'] %}
+                      <option value="{{ c }}" {{ 'selected' if c == s.category }}>{{ c }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" class="ghost">Accept</button>
+                </form>
+                <form method="post" action="/insights/suggest/{{ s.merchant_key }}/reject" class="inline-form">
+                  <button class="link-button" type="submit">no</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  {% else %}
+    <p class="notice info"><span class="ico">&#9432;</span>
+      <span>No model configured, and the app works completely without one &mdash;
+      nothing above needed it. The free option is
+      <a href="https://ollama.com">Ollama</a> on this machine:
+      <code>ollama pull llama3.2:3b</code>, then leave the URL below as it is.</span></p>
+  {% endif %}
+
+  <details class="table-view">
+    <summary>{{ 'Change the model' if llm.enabled else 'Set a model up' }}</summary>
+    <form method="post" action="/insights/llm-settings" class="stacked-form" style="margin-top:14px">
+      <label>Endpoint (OpenAI-compatible)
+        <input type="text" name="llm_url" value="{{ llm.url }}" placeholder="{{ llm.url }}">
+        <span class="hint">Leave as-is for Ollama on this machine. Any provider with a
+          free tier works too &mdash; set FINASST_LLM_KEY in the environment for the key,
+          so it is never written to the database.</span>
+      </label>
+      <label>Model <input type="text" name="llm_model" value="{{ llm.model }}"></label>
+      <label class="teach-toggle">
+        <input type="checkbox" name="llm_enabled" value="true" {{ 'checked' if llm.enabled }}>
+        Enabled
+      </label>
+      <button type="submit">Save</button>
+    </form>
+  </details>
+</section>
+{% endblock %}

@@ -68,6 +68,23 @@
      <a href="/income">Change</a></span></p>
 {% endif %}
 
+{% if top_insights %}
+<section class="panel accent-warm">
+  <div class="panel-head">
+    <h2>Worth a look</h2>
+    <a class="reset" href="/insights">All findings and the forecast &rarr;</a>
+  </div>
+  <div class="finding-strip">
+    {% for i in top_insights %}
+      <a href="/insights" class="sev-{{ i.severity }}">
+        <span class="t">{{ i.headline }}</span>
+        <span class="muted small">{{ i.basis }}</span>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 {% if coverage.unmatched_outflow > 0.01 %}
 <section class="panel coverage accent-flag">
   <h2>What this app cannot see</h2>
