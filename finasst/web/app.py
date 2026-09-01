@@ -279,12 +279,25 @@ def _query_string(q, category, month, only_uncategorised) -> str:
     return urlencode(parts)
 
 
+def _like(text: str) -> str:
+    r"""Escape a user's search text for LIKE.
+
+    Without this, searching for "%" matches every row -- which was more than a
+    surprising search result: the bulk-categorise guard checks that a filter is
+    non-empty, so a one-character search of "%" satisfied the guard and then
+    relabelled the entire database in one click.
+    """
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _where(filters: dict) -> tuple[str, list]:
     sql = ["WHERE 1=1"]
     params: list = []
     if filters["q"]:
-        sql.append("AND (t.description LIKE ? OR t.raw_description LIKE ?)")
-        params += [f"%{filters['q']}%", f"%{filters['q']}%"]
+        sql.append(r"AND (t.description LIKE ? ESCAPE '\' "
+                   r"OR t.raw_description LIKE ? ESCAPE '\')")
+        params += [_like(filters["q"]), _like(filters["q"])]
     if filters["category"]:
         sql.append("AND t.category = ?")
         params.append(filters["category"])
@@ -367,13 +380,23 @@ def export_transactions(
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
+
+    def safe(value) -> str:
+        """Stop a merchant name being executed as a spreadsheet formula.
+
+        A statement description is untrusted text. Excel and LibreOffice treat a
+        cell starting = + - or @ as a formula, so exporting one verbatim turns a
+        transaction description into code that runs when the file is opened.
+        """
+        text = "" if value is None else str(value)
+        return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
     writer.writerow(["date", "description", "raw_description", "account", "amount",
                      "currency", "category", "category_source", "source_file"])
     for r in rows:
         writer.writerow([
-            r["date"], r["description"], r["raw_description"], r["account_name"],
-            f"{r['amount']:.2f}", r["currency"], r["category"] or "",
-            r["category_source"] or "", r["source_file"] or "",
+            r["date"], safe(r["description"]), safe(r["raw_description"]),
+            safe(r["account_name"]), f"{r['amount']:.2f}", r["currency"],
+            r["category"] or "", r["category_source"] or "", safe(r["source_file"]),
         ])
     stamp = date.today().isoformat()
     return Response(

@@ -67,6 +67,49 @@ def _link(**params) -> str:
     return "/transactions?" + urlencode(clean) if clean else "/transactions"
 
 
+def fixed_costs(conn: sqlite3.Connection, window: int = 6) -> dict[str, dict]:
+    """Merchants that charged a steady amount in EVERY one of the last `window`
+    complete months.
+
+    Stricter than analytics.recurring_charges, deliberately. That function
+    answers "what charges you regularly", which allows gaps — and a weekly
+    grocery shop or a bi-monthly hydro bill both qualify. This one answers
+    "what is committed", which is a stronger claim and the one the forecast and
+    the fixed-cost finding both make out loud. Getting it wrong put a grocery
+    bill and half a hydro bill into a figure described as money that goes out
+    whether or not you do anything.
+    """
+    months = [m["month"] for m in analytics.monthly_totals(conn)
+              if m["month"] < date.today().strftime("%Y-%m")][-window:]
+    if len(months) < MIN_HISTORY_MONTHS:
+        return {}
+    out = {}
+    for key, entry in _merchant_months(conn).items():
+        amounts = [entry["by_month"].get(m) for m in months]
+        if any(a is None for a in amounts):
+            continue                      # skipped a month: not committed
+        # A bill charges ONCE. A grocery shop visited weekly can total a steady
+        # amount month after month and still be entirely discretionary --
+        # calling it money that goes out whether or not you do anything is the
+        # difference between a fixed cost and a habit.
+        if any(entry["counts"].get(m, 0) != 1 for m in months):
+            continue
+        mean = sum(amounts) / len(amounts)
+        if mean <= 0:
+            continue
+        spread = (sum((a - mean) ** 2 for a in amounts) / len(amounts)) ** 0.5
+        if spread / mean > analytics.RECURRING_MAX_VARIATION:
+            continue                      # too wobbly to be a bill
+        out[key] = {"merchant": entry["merchant"], "category": entry["category"],
+                    "monthly": round(mean, 2), "by_month": entry["by_month"],
+                    "months": months}
+    return out
+
+
+def committed_monthly(conn: sqlite3.Connection, window: int = 6) -> float:
+    return round(sum(f["monthly"] for f in fixed_costs(conn, window).values()), 2)
+
+
 def _merchant_months(conn: sqlite3.Connection) -> dict[str, dict]:
     """Per merchant, what it charged in each month it charged at all."""
     rows = conn.execute(
@@ -81,8 +124,9 @@ def _merchant_months(conn: sqlite3.Connection) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for r in rows:
         entry = out.setdefault(r["key"], {"merchant": r["description"], "category": r["cat"],
-                                          "by_month": {}, "charges": 0})
+                                          "by_month": {}, "counts": {}, "charges": 0})
         entry["by_month"][r["ym"]] = float(r["spent"])
+        entry["counts"][r["ym"]] = int(r["n"])
         entry["charges"] += int(r["n"])
     return out
 
@@ -108,6 +152,12 @@ def price_changes(conn: sqlite3.Connection, months: list[str]) -> list[Insight]:
         if recent not in by_month or len(history) < MIN_HISTORY_MONTHS:
             continue
         if entry["charges"] != len(by_month):      # more than one charge a month
+            continue
+        # ...and one charge in EVERY month. Ontario hydro bills every second
+        # month; calling $200 bi-monthly "$200 a month" and annualising it made
+        # the yearly figure twice the truth, which is the number a person would
+        # actually budget against.
+        if not _charged_every_month(by_month, months):
             continue
         was, now = median(history), by_month[recent]
         # A price change is a change to a PRICE, which means the old amount has
@@ -281,12 +331,17 @@ def unusual_charges(conn: sqlite3.Connection, months: list[str]) -> list[Insight
     return found
 
 
-def possible_duplicates(conn: sqlite3.Connection) -> list[Insight]:
+def possible_duplicates(conn: sqlite3.Connection, months: Optional[list[str]] = None,
+                        recent_months: int = 3) -> list[Insight]:
     """The same merchant, the same amount to the cent, days apart.
 
     Same-day identical charges are already collapsed by the import fingerprint,
     so anything found here is a genuine near-repeat worth a second look.
     """
+    # Bounded to the recent window: a duplicate from eighteen months ago is
+    # either not a duplicate or long since dealt with, and it sorts at the top
+    # of the page forever because it carries the highest severity.
+    since = (months or [""])[-recent_months] if months and len(months) >= recent_months else ""
     rows = conn.execute(
         """SELECT a.id AS a_id, b.id AS b_id, a.description, a.date AS a_date,
                   b.date AS b_date, -a.amount AS spent, a.category
@@ -295,8 +350,9 @@ def possible_duplicates(conn: sqlite3.Connection) -> list[Insight]:
             AND lower(a.description) = lower(b.description)
             AND a.amount = b.amount AND a.id < b.id
            WHERE a.amount < -? AND julianday(b.date) - julianday(a.date) BETWEEN 0 AND ?
+             AND substr(a.date, 1, 7) >= ?
            ORDER BY a.date DESC""",
-        (DUPLICATE_MIN_ABS, DUPLICATE_WINDOW_DAYS),
+        (DUPLICATE_MIN_ABS, DUPLICATE_WINDOW_DAYS, since),
     ).fetchall()
     return [
         Insight(
@@ -319,7 +375,7 @@ def fixed_cost_pressure(conn: sqlite3.Connection, totals: list[dict]) -> list[In
     complete = [m for m in totals if m["month"] < date.today().strftime("%Y-%m")]
     if len(complete) < MIN_HISTORY_MONTHS:
         return []
-    fixed = analytics.fixed_monthly_cost(conn)
+    fixed = committed_monthly(conn)
     declared = income.declared_monthly(conn)
     earned = declared or (sum(m["income"] for m in complete[-3:]) / len(complete[-3:]))
     if earned <= 0 or fixed <= 0:
@@ -337,8 +393,8 @@ def fixed_cost_pressure(conn: sqlite3.Connection, totals: list[dict]) -> list[In
         detail=(f"${fixed:,.0f} a month goes out on merchants that bill you a steady amount "
                 f"every month, against ${earned:,.0f} of income. That leaves "
                 f"${earned - fixed:,.0f} for everything else, including saving."),
-        basis=f"fixed = ${fixed:,.0f}/month from the recurring detector; income = "
-              f"${earned:,.0f} ({source})",
+        basis=f"committed = ${fixed:,.0f}/month from merchants charging a steady "
+              f"amount in every one of the last 6 months; income = ${earned:,.0f} ({source})",
         amount=fixed,
     )]
 
@@ -389,6 +445,7 @@ def forecast(conn: sqlite3.Connection, ahead: int = FORECAST_MONTHS) -> Forecast
         return result
 
     used = complete[-6:]
+    window = [m["month"] for m in used]
     this_ym = date.today().strftime("%Y-%m")
     behind = (int(this_ym[:4]) * 12 + int(this_ym[5:])) - (
         int(used[-1]["month"][:4]) * 12 + int(used[-1]["month"][5:]))
@@ -398,11 +455,27 @@ def forecast(conn: sqlite3.Connection, ahead: int = FORECAST_MONTHS) -> Forecast
             "This projects forward from history that has a gap in front of it — import your "
             "recent statements before leaning on it."
         )
-    result.fixed = analytics.fixed_monthly_cost(conn)
-    variable = [max(m["spend"] - result.fixed, 0.0) for m in used]
+    committed = fixed_costs(conn, window=len(used))
+    result.fixed = round(sum(f["monthly"] for f in committed.values()), 2)
+    # Subtract what the committed merchants charged in THAT month, not today's
+    # average of them. Using one figure for every month, then clamping the
+    # result at zero, reported "variable $0" for a household that plainly spends
+    # on groceries, and produced a best-to-worst range containing two of the
+    # eight months it was computed from.
+    variable = []
+    for month in used:
+        fixed_that_month = sum(
+            f["by_month"].get(month["month"], 0.0) for f in committed.values())
+        variable.append(month["spend"] - fixed_that_month)
     result.variable_typical = round(median(variable), 2)
     result.variable_low = round(min(variable), 2)
     result.variable_high = round(max(variable), 2)
+    if result.variable_low < 0:
+        result.warnings.append(
+            "At least one month spent less than its own committed costs — a bill "
+            "that did not land, or a refund. The low end of the range reflects that "
+            "month and is not a month you should plan around."
+        )
 
     declared = income.declared_monthly(conn)
     if declared:
@@ -457,12 +530,18 @@ def forecast(conn: sqlite3.Connection, ahead: int = FORECAST_MONTHS) -> Forecast
 def all_insights(conn: sqlite3.Connection, limit: Optional[int] = None) -> list[Insight]:
     """Every detector, ranked: most serious first, then by the money involved."""
     totals = analytics.monthly_totals(conn)
+    # The month in progress is not a month. Including it made `recent` a
+    # part-month the moment a single September row landed, at which point every
+    # merchant "stopped charging" and August's real findings stopped being
+    # checked at all. One payroll deposit was enough to do it.
+    this_month = date.today().strftime("%Y-%m")
+    totals = [m for m in totals if m["month"] < this_month]
     months = [m["month"] for m in totals]
     if len(months) < MIN_HISTORY_MONTHS:
         return []
 
     found = (
-        possible_duplicates(conn)
+        possible_duplicates(conn, months)
         + price_changes(conn, months)
         + recurring_started_or_stopped(conn, months)
         + category_spikes(conn, months)

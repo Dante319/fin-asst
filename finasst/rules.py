@@ -64,8 +64,12 @@ def inventory(conn: sqlite3.Connection, example_limit: int = 3) -> list[RuleInfo
         for r in rules
     }
 
+    # Rows you corrected by hand are decided by you, not by a rule:
+    # categorize_all skips them, so counting them here would credit a rule with
+    # work it does not do -- exactly the lie this count exists to avoid.
     rows = conn.execute(
-        "SELECT description, raw_description FROM transactions"
+        "SELECT description, raw_description FROM transactions "
+        "WHERE category_source IS NULL OR category_source != 'manual'"
     ).fetchall()
     for row in rows:
         text = f"{row['description']} {row['raw_description']}"
@@ -88,7 +92,7 @@ def inventory(conn: sqlite3.Connection, example_limit: int = 3) -> list[RuleInfo
         for other in rules:
             if int(other["id"]) == entry.id:
                 break            # rules are ranked, so anything after this loses
-            if other["category"] != entry.category and rule_matches(other, probe, normalise(probe)):
+            if rule_matches(other, probe, normalise(probe)):
                 entry.shadowed_by = other["pattern"]
                 break
     return list(info.values())
@@ -122,6 +126,34 @@ def explain(conn: sqlite3.Connection, text: str) -> Explanation:
     )
 
 
+# Nested quantifiers -- (a+)+ , (x*)* , (\d+)+ -- are the classic shape that
+# makes Python's backtracking engine take exponential time. The rule is stored
+# and then run against every description on every page load, so one of these
+# does not fail once: it wedges /rules, /insights and every future import,
+# including the page you would delete it from.
+_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")
+_SLOW_BUDGET_SECONDS = 0.25
+
+
+def _refuse_if_slow(compiled, pattern: str) -> None:
+    import time
+
+    if _NESTED_QUANTIFIER.search(pattern):
+        raise RuleError(
+            "That pattern nests one repeat inside another, which can take "
+            "exponential time on an unlucky merchant name and would hang every "
+            "page in the app. Rewrite it without the inner + or *."
+        )
+    probe = ("a" * 24) + "!" + ("0-9 " * 6)
+    started = time.perf_counter()
+    compiled.search(probe)
+    if time.perf_counter() - started > _SLOW_BUDGET_SECONDS:
+        raise RuleError(
+            "That pattern is too slow to run against every transaction. "
+            "Try a plainer one -- 'words' handles most merchants."
+        )
+
+
 class RuleError(ValueError):
     """A rule that would not work, explained in words rather than a traceback."""
 
@@ -142,10 +174,26 @@ def add_rule(
         raise RuleError(f"{match_type!r} is not a kind of match this app knows.")
     if match_type == "regex":
         try:
-            re.compile(pattern)
+            compiled = re.compile(pattern)
         except re.error as exc:
             raise RuleError(f"That is not a valid regular expression: {exc}") from exc
+        _refuse_if_slow(compiled, pattern)
 
+    existing = conn.execute(
+        "SELECT id, is_user, category FROM rules WHERE pattern = ? AND match_type = ?",
+        (pattern, match_type),
+    ).fetchone()
+    if existing is not None and not existing["is_user"]:
+        # Overwriting it would flip a built-in rule to is_user=1, at which point
+        # remove_rule would happily delete it and the next seed would put it
+        # back -- the exact "that would come back" outcome the error message
+        # for deleting a built-in promises cannot happen.
+        raise RuleError(
+            f"There is already a built-in rule for {pattern!r} (currently "
+            f"{existing['category']}). Built-in rules live in the code, so this "
+            "one cannot be redefined here. Use a slightly more specific pattern "
+            "of your own -- yours outranks it."
+        )
     cur = conn.execute(
         "INSERT INTO rules(pattern, match_type, category, priority, is_user) "
         "VALUES (?, ?, ?, ?, 1) "

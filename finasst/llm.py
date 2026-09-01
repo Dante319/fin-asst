@@ -50,6 +50,7 @@ from .config import CATEGORIES
 DEFAULT_URL = "http://127.0.0.1:11434/v1/chat/completions"   # Ollama, local and free
 DEFAULT_MODEL = "llama3.2:3b"
 MAX_MERCHANTS_PER_RUN = 40
+BREADTH_LIMIT = 5          # distinct merchant names one accepted key may cover
 TIMEOUT_SECONDS = 90
 
 
@@ -142,17 +143,22 @@ def pending_merchants(conn: sqlite3.Connection, limit: int = MAX_MERCHANTS_PER_R
         "WHERE category IS NULL GROUP BY lower(description) ORDER BY COUNT(*) DESC"
     ).fetchall()
     seen = {r["merchant_key"] for r in conn.execute("SELECT merchant_key FROM llm_suggestions")}
-    out = []
+    grouped: dict[str, dict] = {}
     for r in rows:
         key = merchant_key(r["description"])
         if not key or key in seen:
             continue
-        seen.add(key)
-        out.append({"key": key, "example": r["description"], "count": int(r["n"]),
-                    "total": round(float(r["total"] or 0), 2)})
-        if len(out) >= limit:
-            break
-    return out
+        entry = grouped.setdefault(key, {"key": key, "example": r["description"],
+                                         "count": 0, "total": 0.0, "descriptions": []})
+        entry["count"] += int(r["n"])
+        entry["total"] = round(entry["total"] + float(r["total"] or 0), 2)
+        # Every distinct description behind the key, not just the first one.
+        # "POS PURCHASE MARCHE LEO" and "POS PURCHASE DR PATEL DENTISTRY" share a
+        # key; asking about one of them and caching the answer under the shared
+        # key silently excluded the other four from ever being asked about.
+        if r["description"] not in entry["descriptions"]:
+            entry["descriptions"].append(r["description"])
+    return list(grouped.values())[:limit]
 
 
 PROMPT = (
@@ -174,7 +180,11 @@ def suggest_categories(conn: sqlite3.Connection, limit: int = MAX_MERCHANTS_PER_
     if not pending:
         return []
 
-    listing = "\n".join(f"- {p['example']}" for p in pending)
+    # Show the model every distinct description behind a key, so a shared
+    # prefix cannot make one merchant stand in for four different ones.
+    listing = "\n".join(
+        f"- {d}" for p in pending for d in p.get("descriptions", [p["example"]])[:4]
+    )
     content = _call(cfg, [
         {"role": "system", "content": PROMPT.format(categories=", ".join(CATEGORIES))},
         {"role": "user", "content": listing},
@@ -185,11 +195,31 @@ def suggest_categories(conn: sqlite3.Connection, limit: int = MAX_MERCHANTS_PER_
 
     made = []
     for p in pending:
-        label = by_key.get(normalise(p["example"])) or by_key.get(p["key"]) or {}
+        label = {}
+        for candidate in [p["example"], *p.get("descriptions", []), p["key"]]:
+            label = by_key.get(normalise(candidate)) or {}
+            if label:
+                break
+        if not label:
+            # The model tidied the name ("Blue Door Bakeshop" for
+            # "BLUE DOOR BAKESHOP #12"). Fall back to the best word overlap
+            # rather than caching a null answer the user can never re-ask.
+            wanted = set(normalise(p["example"]).split())
+            best, score = None, 0
+            for name, item in by_key.items():
+                overlap = len(wanted & set(name.split()))
+                if overlap > score:
+                    best, score = item, overlap
+            if score >= 2:
+                label = best or {}
         category = label.get("category")
         if category not in CATEGORIES:
             category = None
-        confidence = str(label.get("confidence") or "low").lower()
+        confidence = str(label.get("confidence") or "low").lower().strip()
+        if confidence not in ("high", "medium", "low"):
+            # The reply is untrusted text. This value is stored, rendered, and
+            # used as an ORDER BY key; a 200 KB string was accepted before.
+            confidence = "low"
         conn.execute(
             "INSERT INTO llm_suggestions(merchant_key, example, category, confidence, model) "
             "VALUES (?, ?, ?, ?, ?) ON CONFLICT(merchant_key) DO UPDATE SET "
@@ -236,7 +266,11 @@ def suggestions(conn: sqlite3.Connection, status: str = "proposed") -> list[Sugg
     }
     out = []
     for r in rows:
-        hits = sum(n for desc, n in counts.items() if r["merchant_key"] in desc)
+        # Count what the rule WOULD match: a word-bounded match on the
+        # normalised description, the same test the matcher will apply. A plain
+        # substring test counted rows the accepted rule would never touch.
+        pattern = re.compile(rf"\b{re.escape(r['merchant_key'])}\b")
+        hits = sum(n for desc, n in counts.items() if pattern.search(desc))
         out.append(Suggestion(r["merchant_key"], r["example"], r["category"],
                               r["confidence"], r["model"], r["status"], hits))
     return out
@@ -259,6 +293,22 @@ def accept(conn: sqlite3.Connection, merchant_key_value: str, category: Optional
     chosen = category or row["category"]
     if not chosen:
         raise LLMError("That suggestion has no category to accept. Pick one yourself.")
+
+    # The key is the first two non-numeric words, which for terminal prefixes
+    # like "POS PURCHASE ..." is shared by every card purchase on the account.
+    # Accepting that as a priority-10 rule filed a dentist, a vet and a wine
+    # shop as Groceries in one click. Check the breadth before writing it.
+    distinct = [
+        r["description"] for r in conn.execute(
+            "SELECT DISTINCT description FROM transactions "
+            "WHERE lower(description) LIKE ?", (f"%{row['merchant_key']}%",))
+    ]
+    if len(distinct) > BREADTH_LIMIT:
+        raise LLMError(
+            f"“{row['merchant_key']}” appears in {len(distinct)} different merchant "
+            "names, so a rule on it would file all of them the same way. That is "
+            "too broad to accept blindly — add a narrower rule on the Rules page."
+        )
     rules.add_rule(conn, row["merchant_key"], chosen, match_type="words")
     conn.execute("UPDATE llm_suggestions SET status = 'accepted', category = ? "
                  "WHERE merchant_key = ?", (chosen, merchant_key_value))

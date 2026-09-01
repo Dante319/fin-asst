@@ -119,7 +119,7 @@
           {% for r in mine %}
             <tr>
               <td><code>{{ r.pattern }}</code>
-                {% if r.examples %}<div class="note">{{ r.examples | join(' &middot; ') | safe }}</div>{% endif %}
+                {% if r.examples %}<div class="note">{{ r.examples | join(" \u00b7 ") }}</div>{% endif %}
                 {% if r.shadowed_by %}<div class="note">never wins &mdash;
                   <code>{{ r.shadowed_by }}</code> matches first</div>{% endif %}
               </td>
