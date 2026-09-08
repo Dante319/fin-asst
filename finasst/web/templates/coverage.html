@@ -23,10 +23,11 @@
     <span class="stat-icon" aria-hidden="true">&#9997;</span>
     <span class="stat-label">You have accounted for</span>
     <span class="stat-value">{{ coverage.declared_total | money }}</span>
-    <span class="stat-sub">of the gap, on your word rather than a matched statement{%
+    <span class="stat-sub">already taken out of the number above, on your word
+      rather than a matched statement{%
       if coverage.resolved_as_spending > 0.01 %}; a further
       {{ coverage.resolved_as_spending | money }} you declared as money that genuinely
-      left has been refiled as spending and is no longer part of the gap{% endif %}</span>
+      left has been refiled as spending and was never part of this total{% endif %}</span>
   </div>
   <div class="stat t2 rise">
     <span class="stat-icon" aria-hidden="true">&#10067;</span>

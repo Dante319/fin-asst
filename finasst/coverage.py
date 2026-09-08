@@ -18,8 +18,13 @@ Two jobs:
 
 Most of that gap is not a mystery to the person using the app -- it is the
 account at another bank they never exported. `destinations.py` is how they say
-so, and coverage reports what they declared in a SEPARATE column from what the
-matcher verified. A declaration explains an outflow; it never proves one.
+so. A declaration never proves an outflow the way a matched statement does,
+and the verdict text says so every time -- but as of 2026-09-08, an own_account
+or debt declaration IS subtracted from the reported gap, by Dante's own choice,
+because a total that never moves no matter how much you explain reads as if
+nothing you say makes a difference. Only kind=external ever counted as
+resolved before that; now own_account and debt do too, just still labelled as
+your word rather than a verified pair.
 """
 from __future__ import annotations
 
@@ -121,8 +126,10 @@ class Coverage:
     total_outflow: float = 0.0
     destinations: list[dict] = field(default_factory=list)
     accounts: list[str] = field(default_factory=list)
-    # Split of `invisible` into the part you have accounted for by hand and
-    # the part nothing in the app explains. Declared is not verified.
+    # own_account/debt declarations have already been subtracted out of
+    # `invisible` below -- these two fields are what was taken out, kept
+    # separately so the verdict can still say it is your word, not a matched
+    # statement, even though the headline number has already moved.
     declared_still_yours: float = 0.0    # kind=own_account: moved, not spent
     declared_debt: float = 0.0           # kind=debt: gone, settles a balance elsewhere
     resolved_as_spending: float = 0.0    # kind=external: now counted as spending
@@ -152,35 +159,47 @@ class Coverage:
         return round(self.declared_still_yours + self.declared_debt, 2)
 
     def verdict(self) -> str:
-        if self.invisible < 0.01:
+        if self.invisible < 0.01 and self.declared_total < 0.01:
             return "Every outflow lands in an account this app can see."
-        note = (
-            f"${self.invisible:,.0f} left your accounts for somewhere this app "
-            f"cannot see -- {100 * self.gap_ratio:.0f}% of all money out. Spending "
-            f"figures below cover only the rest."
-        )
+
+        if self.invisible >= 0.01:
+            note = (
+                f"${self.invisible:,.0f} left your accounts for somewhere this app "
+                f"cannot see -- {100 * self.gap_ratio:.0f}% of all money out. Spending "
+                f"figures below cover only the rest."
+            )
+        else:
+            note = (
+                "Nothing is left unexplained -- every outflow this app has no "
+                "statement for, you have told it about."
+            )
+
         if self.to_untracked_savings > 0.01:
             note += (
                 f" ${self.to_untracked_savings:,.0f} of that went to savings or "
                 "investments, so it is not lost -- just not visible here."
             )
+
         # What you have said about it. Deliberately worded as your account of
         # it, not the app's finding: nothing here was checked against a
         # statement, and a declaration that reads like evidence is worse than
-        # no declaration at all.
+        # no declaration at all. It has, however, already been subtracted from
+        # the number above (2026-09-08) -- that is the one place a declaration
+        # is allowed to move a figure rather than just annotate it.
         if self.declared_still_yours > 0.01:
             note += (
-                f" You have accounted for ${self.declared_still_yours:,.0f} of it "
-                "as money moved to your own accounts elsewhere -- still yours, "
-                "just not visible here. That is your word, not a matched statement."
+                f" ${self.declared_still_yours:,.0f} more has already been taken "
+                "out of that number because you told the app it is still yours, "
+                "in an account elsewhere -- that is your word, not a matched "
+                "statement."
             )
         if self.declared_debt > 0.01:
             note += (
-                f" ${self.declared_debt:,.0f} pays balances at institutions this app "
-                "has no statements for, so the outflow is explained but the "
-                "spending behind it is not."
+                f" ${self.declared_debt:,.0f} more pays balances at institutions "
+                "this app has no statements for -- taken out of the number above "
+                "because you said so, but the spending behind it is not."
             )
-        if self.unexplained > 0.01 and self.declared_total > 0.01:
+        if self.unexplained > 0.01:
             note += f" ${self.unexplained:,.0f} is still unexplained."
         return note
 
@@ -203,18 +222,28 @@ def coverage(conn: sqlite3.Connection, since: str | None = None) -> Coverage:
     savings = total("AND transfer_peer_id IS NULL AND category = 'Savings & Investments'")
 
     rows = conn.execute(
-        f"""SELECT description, COUNT(*) n, SUM(-amount) s FROM transactions
+        f"""SELECT description, raw_description, COUNT(*) n, SUM(-amount) s FROM transactions
             WHERE amount < 0 AND transfer_peer_id IS NULL
             AND category = 'Transfer' {where}
             GROUP BY lower(description) ORDER BY s DESC""",
         args,
     ).fetchall()
 
+    # A destination of kind own_account/debt vouches for where the money went
+    # without a matching statement. It is still not verified -- but at Dante's
+    # explicit direction (2026-09-08) it is taken out of the reported gap
+    # rather than sitting alongside it unchanged, so the headline number moves
+    # once he has explained something instead of staying stuck at the raw
+    # total forever. kind=external never reaches here: apply_all() has already
+    # moved those rows out of category='Transfer' by the time this runs.
+    non_spending_dests = [d for d in destinations.all_destinations(conn) if not d.spends]
+
     # Named dest_rows, not `destinations`: the module of that name is imported
     # here, and shadowing it made every coverage call raise.
     dest_rows = [
         {"destination": r["description"], "count": r["n"], "amount": round(r["s"], 2)}
         for r in rows if r["s"] > 0
+        and destinations.match(f"{r['description']} {r['raw_description']}", non_spending_dests) is None
     ]
     unmatched = round(sum(d["amount"] for d in dest_rows), 2)
 

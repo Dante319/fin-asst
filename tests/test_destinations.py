@@ -38,16 +38,17 @@ def test_an_undeclared_transfer_is_unexplained(tmp_path):
     assert cov.declared_total == 0.0
 
 
-def test_declaring_your_own_account_explains_it_without_claiming_it_was_seen(tmp_path):
-    """The gap total must NOT shrink -- the money is still invisible. What
-    changes is that it is no longer unexplained."""
+def test_declaring_your_own_account_explains_it_and_shrinks_the_gap(tmp_path):
+    """As of 2026-09-08 a declaration is subtracted from the reported gap,
+    at Dante's direction -- it is still never claimed as a matched statement,
+    but it no longer sits next to an unmoved total forever."""
     conn = setup(tmp_path)
     add(conn, "Chequing", "2026-07-02", "e-transfer to cibc", -900, "Transfer")
     destinations.add(conn, destinations.Destination(
         pattern="cibc", label="CIBC chequing", kind="own_account"))
     cov = gap(conn)
-    assert cov.invisible == 900.0            # still not visible
-    assert cov.unexplained == 0.0            # but no longer a mystery
+    assert cov.invisible == 0.0               # taken out of the gap
+    assert cov.unexplained == 0.0              # and no longer a mystery
     assert cov.declared_still_yours == 900.0
     assert "still yours" in cov.verdict()
     assert "your word, not a matched statement" in cov.verdict()
@@ -83,9 +84,41 @@ def test_debt_explains_the_outflow_and_says_what_it_does_not_explain(tmp_path):
     destinations.add(conn, destinations.Destination(
         pattern="rbc visa", label="RBC Visa", kind="debt"))
     cov = gap(conn)
+    assert cov.invisible == 0.0
     assert cov.declared_debt == 2000.0
     assert cov.unexplained == 0.0
     assert "spending behind it is not" in cov.verdict()
+
+
+def test_a_declared_row_drops_out_of_the_gap_breakdown(tmp_path):
+    """coverage.destinations feeds the dashboard's 'what this app cannot see'
+    bar chart. A row that has been explained should not still sit in it,
+    unchanged, next to the ones that have not."""
+    conn = setup(tmp_path)
+    add(conn, "Chequing", "2026-07-02", "e-transfer to cibc", -900, "Transfer")
+    add(conn, "Chequing", "2026-07-03", "e-transfer to mom", -200, "Transfer")
+    destinations.add(conn, destinations.Destination(
+        pattern="cibc", label="CIBC chequing", kind="own_account"))
+    cov = gap(conn)
+    labels = {d["destination"] for d in cov.destinations}
+    assert "e-transfer to cibc" not in labels
+    assert "e-transfer to mom" in labels
+    assert cov.unmatched_outflow == 200.0
+    assert cov.invisible == 200.0
+
+
+def test_a_partial_own_account_declaration_still_shows_the_rest_as_unseen(tmp_path):
+    """Declaring one description does not launder every other one -- the gap
+    only shrinks by exactly what was explained."""
+    conn = setup(tmp_path)
+    add(conn, "Chequing", "2026-07-02", "e-transfer to cibc", -900, "Transfer")
+    add(conn, "Chequing", "2026-07-03", "e-transfer to unknown", -100, "Transfer")
+    destinations.add(conn, destinations.Destination(
+        pattern="cibc", label="CIBC chequing", kind="own_account"))
+    cov = gap(conn)
+    assert cov.invisible == 100.0
+    assert cov.declared_still_yours == 900.0
+    assert cov.unexplained == 100.0
 
 
 # ------------------------------------------------------------------- guardrails
@@ -155,6 +188,6 @@ def test_the_window_applies_to_declarations_too(tmp_path):
     destinations.add(conn, destinations.Destination(
         pattern="cibc", label="CIBC chequing", kind="own_account"))
     cov = coverage.coverage(conn, since="2026-07-01")
-    assert cov.invisible == 600.0
+    assert cov.invisible == 0.0               # fully explained within the window
     assert cov.declared_still_yours == 600.0
     assert cov.unexplained == 0.0

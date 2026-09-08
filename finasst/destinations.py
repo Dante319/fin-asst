@@ -8,11 +8,14 @@ But most of that gap is not a mystery to YOU. It is the account at another
 bank you never exported, the money you send home every month, the card you pay
 off somewhere else. This module is how you say so.
 
-A destination is a declaration, and declarations are not evidence. Nothing
-here reclassifies money as "seen": a declared transfer is reported in its own
-column, separately from the pairs the matcher actually verified against a real
-inflow. The point is to shrink the *unexplained* number to the part that
-genuinely deserves your attention, not to make the gap disappear.
+A destination is a declaration, and declarations are not evidence -- own_account
+and debt are never counted as a verified match, and the app says so every time
+it reports them. As of 2026-09-08 they DO shrink the reported gap itself
+(coverage.Coverage.invisible), by Dante's own choice: a total that stayed
+exactly the same no matter how much he explained made the app feel like it was
+ignoring him. What still never happens is a declaration silently becoming
+"seen" -- it stays labelled as your word, not a matched statement, in every
+place it is shown.
 
 Three kinds, because they mean three different things to the numbers:
 
