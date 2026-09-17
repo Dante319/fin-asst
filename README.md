@@ -2,6 +2,8 @@
 
 A personal finance assistant that runs entirely on your own machine.
 
+[MIT licensed](LICENSE) -- free to clone, run, and modify. Each person who runs it keeps their own database on their own machine; nothing is shared between installs.
+
 Import CSV statements, see where the money actually goes, and project several
 savings goals that compete for the same monthly surplus. No bank connections,
 no API keys, no subscription, no data leaving the laptop. Python and SQLite,
@@ -323,6 +325,31 @@ machine offline.
 uv run pytest
 ```
 
+## Sharing this with someone else
+
+The whole app is built around one person, one machine, one database -- so
+handing it to a friend is just them doing the Quick start above with their own
+copy:
+
+```bash
+git clone https://github.com/Dante319/fin-asst.git
+cd fin-asst
+make sync
+make serve
+```
+
+There is nothing to configure to make this "theirs" -- no account, no shared
+backend, no API key required. `finasst init` creates an empty database on
+their machine the first time they run it, in the same per-user data directory
+described above, and their statements and categorisation rules live there and
+nowhere else. Two people running this independently never see a byte of each
+other's data; there is no server they both talk to.
+
+If you want to keep contributing changes back and forth, the normal GitHub
+flow works: they fork the repo, or you add them as a collaborator, and pull
+requests merge like any other project. The `data/` folder and every database
+file are gitignored, so a `git pull` never pulls someone else's transactions.
+
 ## Not doing (and why)
 
 - **Bank auto-sync.** Every option costs money at any real volume or hands a
@@ -349,4 +376,7 @@ uv run pytest
   `FINASST_LLM_URL`. An API key is read from `FINASST_LLM_KEY` in the
   environment, never written to the database.
 - **Multi-user or hosted deployment.** There is no auth because there is nothing
-  to authenticate. Do not expose this to a network.
+  to authenticate. Do not expose this to a network -- this means one shared
+  server for multiple people, not one person's own local instance. Each
+  person running their own copy on their own machine (see "Sharing this with
+  someone else" above) is exactly the intended use.

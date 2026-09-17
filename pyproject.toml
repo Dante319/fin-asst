@@ -3,6 +3,7 @@ name = "fin-asst"
 version = "0.1.0"
 description = "A private, local-first personal finance assistant: CSV import, spend categorization, and goal projections."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.110",
