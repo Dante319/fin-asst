@@ -350,6 +350,34 @@ flow works: they fork the repo, or you add them as a collaborator, and pull
 requests merge like any other project. The `data/` folder and every database
 file are gitignored, so a `git pull` never pulls someone else's transactions.
 
+### For non-technical friends
+
+If they don't want to touch a terminal at all: on the repo's GitHub page,
+**Code -> Download ZIP**, then unzip it. Inside the folder, double-click:
+
+- **Mac:** `start_mac.command`
+- **Windows:** `start_windows.bat`
+
+The first run installs everything it needs (a small tool called uv, then the
+app itself) and can take a minute or two; after that it starts in a few
+seconds. A browser tab opens on its own once it's ready. The window that
+opens has to stay open while the app runs -- closing it stops the app, and
+that's fine, nothing is lost.
+
+Two one-time security prompts to expect, because this is a file downloaded
+from the internet rather than something from an app store:
+
+- **Mac:** double-clicking may say the file "cannot be opened because it is
+  from an unidentified developer." Right-click (or Control-click) the file
+  and choose **Open** instead -- you only need to do that once.
+- **Windows:** SmartScreen may say "Windows protected your PC." Click **More
+  info**, then **Run anyway**.
+
+Both scripts do exactly what the Quick start section above does by hand --
+install uv, `uv sync`, `finasst init`, `finasst serve` -- there's no
+additional download or account involved, and their data still never leaves
+their machine.
+
 ## Not doing (and why)
 
 - **Bank auto-sync.** Every option costs money at any real volume or hands a
